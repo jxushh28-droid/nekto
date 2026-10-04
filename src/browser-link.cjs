@@ -1,0 +1,40 @@
+'use strict';
+const {EventEmitter}=require('node:events'),fs=require('node:fs/promises'),path=require('node:path');
+const {inspectSite}=require('../browser/site-actions.js');
+const {resolveBrowser}=require('./browser-choice.cjs');
+const {chromium}=require('playwright'),{ORIGIN,withToken}=require('./session.cjs');
+const {installPCMRuntime}=require('../browser/audio-runtime'),{pcmWorkletSource}=require('../browser/pcm-worklet'),{installBridge}=require('../browser/guest-bridge'),{installSiteControls}=require('../browser/site-controls'),{linkCallAudio}=require('../browser/rtc-link');
+const DIR=path.resolve(__dirname,'../data');
+class BrowserLink extends EventEmitter {
+ constructor(mixer,config={}){super();this.mixer=mixer;this.tokens=config.nektoTokens||['',''];this.dir=config.dataDir||process.env.NEKTO_DATA_DIR||DIR;this.slots=[null,null];this.states=[{status:'closed'},{status:'closed'}];this.auto=false;}
+ clean(message){let s=String(message);for(const t of this.tokens)if(t)s=s.split(t).join('[redacted]');return s.slice(0,700);}
+ state(slot,data){this.states[slot]={...this.states[slot],...data};if(typeof data.open==='boolean')this.mixer.activate(slot,data.open);this.emit('state');}
+ async start(){await fs.mkdir(this.dir,{recursive:true});
+ // Native Chromium media permission and a silent source; never use the host PC microphone.
+ const wav=Buffer.alloc(44+48000*2);wav.write('RIFF');wav.writeUInt32LE(wav.length-8,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(48000,24);wav.writeUInt32LE(96000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(wav.length-44,40);const file=path.join(this.dir,'silent-input.wav');await fs.writeFile(file,wav);
+ const selected=resolveBrowser();if(!selected)throw Error('No browser installed. Run npm run setup-browser or install Chrome/Edge.');console.log('Starting '+selected.label+' in the background.');this.engine=await chromium.launch({headless:true,...selected.launch,args:[...(process.env.RAILWAY_PROJECT_ID||process.getuid?.()===0?['--no-sandbox']:[]),'--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream','--use-file-for-fake-audio-capture='+file]});this.engine.on('disconnected',()=>{for(let i=0;i<2;i++)this.state(i,{open:false,status:'closed'});if(!this.stopping)this.emit('fault','Background Chromium stopped. Restart the bot.');});}
+ async open(slot){if(this.slots[slot])return this.slots[slot];let storage;try{storage=JSON.parse(await fs.readFile(path.join(this.dir,'session-'+slot+'.json'),'utf8'));}catch(error){if(error.code!=='ENOENT')throw Error('Could not read saved session '+(slot+1));}
+ const context=await this.engine.newContext({storageState:withToken(storage,this.tokens[slot]),viewport:{width:1100,height:800}});await context.grantPermissions(['microphone'],{origin:ORIGIN});const page=await context.newPage();const entry={context,page,busy:false,mixBusy:false};this.slots[slot]=entry;
+ await page.exposeFunction('__hostPCM',samples=>{if(this.slots[slot]===entry&&Array.isArray(samples)&&samples.length<=4096)this.mixer.pushRemote(slot,Float32Array.from(samples));});
+ await page.exposeFunction('__hostState',data=>{if(this.slots[slot]===entry)this.state(slot,{...data,error:data.error?this.clean(data.error):''});});
+ await context.addInitScript({content:`if(location.origin===${JSON.stringify(ORIGIN)}){window.__neonAudio={send:s=>__hostPCM(s).catch(()=>{}),state:s=>__hostState(s).catch(()=>{}),receive:f=>window.__acceptMix=f,receiveSettings:f=>window.__acceptSettings=f,automation:s=>__hostState({automation:s}).catch(()=>{})};(${installPCMRuntime.toString()})(${JSON.stringify(pcmWorkletSource())});(${installBridge.toString()})({bridgeAudio:false},${JSON.stringify(pcmWorkletSource())});(${installSiteControls.toString()})();}`});
+ page.on('dialog',d=>d.dismiss().catch(()=>{}));page.on('crash',()=>this.state(slot,{status:'error',error:'Nekto page crashed'}));page.on('close',()=>{if(this.slots[slot]===entry)this.state(slot,{open:false,status:'closed'});});
+ this.state(slot,{open:true,status:'loading',error:''});try{await page.goto(ORIGIN+'/audiochat',{waitUntil:'domcontentloaded',timeout:45000});entry.cdp=await context.newCDPSession(page);entry.wc={debugger:{isAttached:()=>true,sendCommand:(name,args)=>entry.cdp.send(name,args)}};
+ await page.evaluate(auto=>window.__acceptSettings?.({autoSearch:auto,muteEffects:true}),this.auto);
+ await page.waitForFunction(()=>!!document.getElementById('app')?.__vue__?.$store,null,{timeout:15000}).catch(()=>{});
+ const configured=!!this.tokens[slot];const applied=await page.evaluate(token=>{if(!token)return true;const root=document.getElementById('app')?.__vue__;return root?.$store?.state?.user?.authToken===token;},this.tokens[slot]);this.state(slot,{status:'ready',tokenStatus:configured?(applied?'configured session loaded':'unverified — site store unavailable or token changed'):'site session'});
+ entry.timer=setInterval(async()=>{if(entry.busy||this.slots[slot]!==entry)return;entry.busy=true;try{const input=await linkCallAudio(entry.wc);this.state(slot,{callInput:input});}catch(error){this.state(slot,{callInput:{error:this.clean(error.message)}});}finally{entry.busy=false;}},1000);entry.timer.unref();return entry;
+ }catch(error){await this.close(slot);throw Error('Caller '+(slot+1)+': '+this.clean(error.message));}}
+ async close(slot){const entry=this.slots[slot];if(!entry)return;this.slots[slot]=null;clearInterval(entry.timer);try{await entry.context.storageState({path:path.join(this.dir,'session-'+slot+'.json')});}catch{}await entry.context.close();this.state(slot,{open:false,status:'closed',callInput:null,automation:null,error:''});}
+ async request(action,slot,value){if(action==='all-close'){await Promise.all([0,1].map(i=>this.close(i)));return;}if(action==='auto'){this.auto=!!value;await Promise.all(this.slots.map(e=>e?.page.evaluate(auto=>window.__acceptSettings?.({autoSearch:auto,muteEffects:true}),this.auto)));return;}if(!Number.isInteger(slot)||slot<0||slot>1)throw Error('Invalid caller');if(action==='close')return this.close(slot);const e=await this.open(slot);if(action==='screenshot')return e.page.screenshot({type:'png'});if(action==='click'){if(!Number.isInteger(value?.x)||!Number.isInteger(value?.y)||value.x<0||value.x>=1100||value.y<0||value.y>=800)throw Error('Coordinates must be within 1100 × 800');await e.page.mouse.click(value.x,value.y);return;}if(action!=='search')throw Error('Unknown action');
+ await e.page.waitForFunction(`()=>{const state=(${inspectSite.toString()})();return state.status!=="loading";}`,null,{timeout:20000}).catch(()=>{});
+ const check=await e.page.evaluate(inspectSite);this.state(slot,{siteStatus:check.status,siteMessage:this.clean(check.message)});
+ if(['in-call','searching'].includes(check.status))return check.message;
+ if(check.status!=='search-ready')throw Error('Caller '+(slot+1)+': '+this.clean(check.message));
+ const result=await e.page.evaluate(inspectSite,{click:true});return result.message;}
+ async probe(slot){const e=await this.open(slot);const result=await e.page.evaluate(inspectSite);this.state(slot,{siteStatus:result.status,siteMessage:this.clean(result.message)});return {caller:slot+1,tokenStatus:this.states[slot].tokenStatus,...result};}
+
+ sendMix(slot,samples){const e=this.slots[slot];if(!e||e.mixBusy||!this.mixer.enabled)return;e.mixBusy=true;e.page.evaluate(pcm=>window.__acceptMix?.(pcm),Array.from(samples)).catch(()=>{}).finally(()=>e.mixBusy=false);}
+ async stop(){this.stopping=true;await Promise.all([0,1].map(i=>this.close(i)));await this.engine?.close();}
+}
+module.exports={BrowserLink};
