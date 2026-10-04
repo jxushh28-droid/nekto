@@ -53,13 +53,13 @@ function installSiteControls() {
     if(!['nekto-me.kz','nekto.me'].includes(location.hostname)){report('unsupported','Automatic search is available on Nekto’s audio page.');return;}
     if(window.__neonBridge?.hasPeers?.()||[...document.querySelectorAll('.callScreen__cancelCallBtn')].some(visible)){attempts=0;wasInCall=true;report('in-call','Waiting for the current call to end');return;}
     if(wasInCall){wasInCall=false;attempts=0;lastClick=Date.now();}
-    const check=window.__inspectNektoSite?.();
+    const check=window.__neonSearch?.observe();
     if(!check){report('waiting','Waiting for site readiness checks');return;}
     if(blocked||check.status==='blocked'){blocked=true;report('blocked',check.message);return;}
     if(check.status!=='search-ready'){report(check.status,check.message);return;}
     if(Date.now()-lastClick<10000){report('searching','Search requested; waiting for the website');return;}
     if(attempts>=1){report('paused','Search was already requested. Start manually if the website did not continue.');return;}
-    const requested=window.__inspectNektoSite({click:true});if(requested.status==='search-ready'){attempts++;lastClick=Date.now();}report(requested.status,requested.message);
+    const requested=window.__neonSearch.request('automatic');if(requested.status==='search-pending'){attempts++;lastClick=Date.now();}report(requested.status,requested.message);
   }
   bridge.receiveSettings?.(settings=>{if(!!settings.autoSearch!==config.autoSearch){attempts=0;blocked=false;}config={autoSearch:!!settings.autoSearch,muteEffects:settings.muteEffects!==false};pulse();});
   window.__neonSiteControls={pulse};

@@ -22,3 +22,9 @@ FORCE_FALLBACK=1 node tests/chromium-routing.cjs
 CHROMIUM_EXECUTABLE can select an installed browser for diagnostics. Never package your .env or data folder.
 
 Caller-only disconnect regression verifies that the Discord connection, active mixer and player are preserved while both Nekto sessions close. Railway build/runtime and actual site readiness are checked separately after deployment.
+
+## Search and session concurrency correction
+
+25 unit tests cover shared manual/automatic search ownership, refusal handling and concurrent caller initialization/close. Browser fixtures check delayed rendering and an access refusal arriving after a search click. Session snapshots now include IndexedDB.
+
+The production page displayed “Доступ к чатам с Вашего IP-адреса заблокирован.” The logs do not identify the trigger. These concurrency fixes do not establish that the restriction has been lifted; a loaded token and visible search button are not proof of server acceptance. No fingerprint, proxy or token-rotation workaround was added.
