@@ -4,8 +4,14 @@ function inspectSite(options={}) {
  const text=document.body?.innerText||'',tidy=s=>String(s||'').replace(/\s+/g,' ').trim();
  const controls=[...document.querySelectorAll('button,[role="button"],input[type="submit"],#searchCompanyBtn,.callScreen__findBtn')].filter(visible);
  const buttons=controls.map(e=>tidy(e.textContent||e.value||e.getAttribute('aria-label'))).filter(Boolean).slice(0,12);
- const refusal=/access (?:denied|blocked)|доступ[^\n]{0,60}(?:ограничен|заблокирован)|слишком (?:много|часто)|попробуйте (?:позже|через)/i;
- if(refusal.test(text))return {status:'blocked',message:'Nekto displays an access refusal. Search stopped.',buttons};
+ // Only direct refusal statements, not rules describing possible restrictions.
+ const refusal=/^(?:access (?:is )?(?:denied|blocked|restricted)|(?:your (?:account|access)|you) (?:is|are|has been|have been) (?:blocked|restricted)|доступ(?: к [^.!?]{1,40})? (?:временно )?(?:ограничен|заблокирован|запрещ[её]н)|(?:ваш аккаунт|вы) (?:временно )?заблокирован|слишком (?:много запросов|частые запросы)|too many (?:requests|calls))(?:[.!?:\s]|$)/i;
+ const messages=[...document.querySelectorAll('[role="alert"],[role="dialog"],dialog[open],.modal.show,.swal2-container')].filter(visible);
+ const lines=source=>String(source||'').split(/\n+/).map(tidy).filter(Boolean);
+ const evidence=messages.flatMap(e=>lines(e.innerText)).find(s=>refusal.test(s))||lines(text).find(s=>refusal.test(s));
+ if(evidence)return {status:'blocked',message:'Nekto refused access: '+evidence.slice(0,400),evidence:evidence.slice(0,400),buttons};
+ const temporary=messages.flatMap(e=>lines(e.innerText)).find(s=>/попробуйте (?:позже|через)|try again later/i.test(s));
+ if(temporary)return {status:'temporary-error',message:'Nekto reports a temporary error: '+temporary.slice(0,400),buttons};
  const challenge=[...document.querySelectorAll('iframe[src*="hcaptcha"],iframe[title*="challenge"],iframe[title*="reCAPTCHA"]')].some(visible)||/verify you are human|checking your browser|подтвердите,? что вы (?:не робот|человек)|проверьте,? что вы не робот/i.test(text);
  if(challenge)return {status:'verification',message:'The page displays a human-verification challenge.',buttons};
  if(window.__neonBridge?.hasPeers?.())return {status:'in-call',message:'Already in a call',buttons};

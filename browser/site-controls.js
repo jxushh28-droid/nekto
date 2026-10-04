@@ -53,17 +53,13 @@ function installSiteControls() {
     if(!['nekto-me.kz','nekto.me'].includes(location.hostname)){report('unsupported','Automatic search is available on Nekto’s audio page.');return;}
     if(window.__neonBridge?.hasPeers?.()||[...document.querySelectorAll('.callScreen__cancelCallBtn')].some(visible)){attempts=0;wasInCall=true;report('in-call','Waiting for the current call to end');return;}
     if(wasInCall){wasInCall=false;attempts=0;lastClick=Date.now();}
-    const challenge=[...document.querySelectorAll('iframe[title*="challenge"],iframe[src*="hcaptcha"],[role="dialog"],dialog[open],.modal.show,.swal2-container')].some(visible);
-    const text=document.body?.innerText||'';
-    if(blocked||/access (?:is )?(?:denied|blocked|restricted)|too many (?:requests|calls)|temporarily blocked|доступ[^\n]{0,60}(?:ограничен|заблокирован)|(?:вы|ваш аккаунт)[^\n]{0,40}заблокирован|слишком (?:много|часто)|попробуйте (?:позже|через)/i.test(text)){blocked=true;report('blocked','Website refused access. Automatic search stopped; check its message.');return;}
-    if(challenge || /verify you are human|checking your browser|подтвердите,? что вы (?:не робот|человек)|проверьте,? что вы не робот/i.test(text)){report('paused','Complete the website’s verification manually.');return;}
-    const label=/^(?:Начать поиск собеседника|Начать(?: новый)? разговор|Новый разговор|Искать(?: нового)? собеседника|Start(?: a new)? conversation|New conversation|Search again|Әңгіме(?:ні)? бастау|Жаңа әңгіме(?:ні)? бастау|Сөйлесуді бастау|Жаңа сөйлесу)$/i;
-    const candidates=[...document.querySelectorAll('#searchCompanyBtn,.callScreen__findBtn,button,[role="button"]')];
-    const button=candidates.find(element=>visible(element)&&!element.disabled&&element.getAttribute('aria-disabled')!=='true'&&!element.classList.contains('disabled')&&label.test((element.textContent||'').trim()));
-    if(!button){report('waiting','Waiting for Nekto’s search button or your setup choices');return;}
+    const check=window.__inspectNektoSite?.();
+    if(!check){report('waiting','Waiting for site readiness checks');return;}
+    if(blocked||check.status==='blocked'){blocked=true;report('blocked',check.message);return;}
+    if(check.status!=='search-ready'){report(check.status,check.message);return;}
     if(Date.now()-lastClick<10000){report('searching','Search requested; waiting for the website');return;}
     if(attempts>=1){report('paused','Search was already requested. Start manually if the website did not continue.');return;}
-    attempts++;lastClick=Date.now();button.click();report('searching','Looking for a new conversation');
+    const requested=window.__inspectNektoSite({click:true});if(requested.status==='search-ready'){attempts++;lastClick=Date.now();}report(requested.status,requested.message);
   }
   bridge.receiveSettings?.(settings=>{if(!!settings.autoSearch!==config.autoSearch){attempts=0;blocked=false;}config={autoSearch:!!settings.autoSearch,muteEffects:settings.muteEffects!==false};pulse();});
   window.__neonSiteControls={pulse};
