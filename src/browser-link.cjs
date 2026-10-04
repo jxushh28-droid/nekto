@@ -1,6 +1,6 @@
 'use strict';
 const {EventEmitter}=require('node:events'),fs=require('node:fs/promises'),path=require('node:path');
-const {inspectSite}=require('../browser/site-actions.js');
+const {inspectSite,sessionStatus}=require('../browser/site-actions.js');
 const {resolveBrowser}=require('./browser-choice.cjs');
 const {chromium}=require('playwright'),{ORIGIN,withToken}=require('./session.cjs');
 const {installPCMRuntime}=require('../browser/audio-runtime'),{pcmWorkletSource}=require('../browser/pcm-worklet'),{installBridge}=require('../browser/guest-bridge'),{installSiteControls}=require('../browser/site-controls'),{linkCallAudio}=require('../browser/rtc-link');
@@ -21,8 +21,9 @@ class BrowserLink extends EventEmitter {
  page.on('dialog',d=>d.dismiss().catch(()=>{}));page.on('crash',()=>this.state(slot,{status:'error',error:'Nekto page crashed'}));page.on('close',()=>{if(this.slots[slot]===entry)this.state(slot,{open:false,status:'closed'});});
  this.state(slot,{open:true,status:'loading',error:''});try{await page.goto(ORIGIN+'/audiochat',{waitUntil:'domcontentloaded',timeout:45000});entry.cdp=await context.newCDPSession(page);entry.wc={debugger:{isAttached:()=>true,sendCommand:(name,args)=>entry.cdp.send(name,args)}};
  await page.evaluate(auto=>window.__acceptSettings?.({autoSearch:auto,muteEffects:true}),this.auto);
- await page.waitForFunction(()=>!!document.getElementById('app')?.__vue__?.$store,null,{timeout:15000}).catch(()=>{});
- const configured=!!this.tokens[slot];const applied=await page.evaluate(token=>{if(!token)return true;const root=document.getElementById('app')?.__vue__;return root?.$store?.state?.user?.authToken===token;},this.tokens[slot]);this.state(slot,{status:'ready',tokenStatus:configured?(applied?'configured session loaded':'unverified — site store unavailable or token changed'):'site session'});
+ await page.waitForFunction(()=>[document.getElementById('app'),document.body,...document.querySelectorAll('*')].some(e=>!!e?.__vue__?.$store?.state?.user?.authToken),null,{timeout:15000}).catch(()=>{});
+ const configured=!!this.tokens[slot];const session=await page.evaluate(sessionStatus,this.tokens[slot]);this.state(slot,{status:'ready',tokenStatus:configured?(session.tokenMatches?'configured session loaded':session.storeFound?'site session differs from configured token':'site store unavailable; token application unverified'):'site session',session});
+
  entry.timer=setInterval(async()=>{if(entry.busy||this.slots[slot]!==entry)return;entry.busy=true;try{const input=await linkCallAudio(entry.wc);this.state(slot,{callInput:input});}catch(error){this.state(slot,{callInput:{error:this.clean(error.message)}});}finally{entry.busy=false;}},1000);entry.timer.unref();return entry;
  }catch(error){await this.close(slot);throw Error('Caller '+(slot+1)+': '+this.clean(error.message));}}
  async close(slot){const entry=this.slots[slot];if(!entry)return;this.slots[slot]=null;clearInterval(entry.timer);try{await entry.context.storageState({path:path.join(this.dir,'session-'+slot+'.json')});}catch{}await entry.context.close();this.state(slot,{open:false,status:'closed',callInput:null,automation:null,error:''});}
@@ -32,7 +33,7 @@ class BrowserLink extends EventEmitter {
  if(['in-call','searching'].includes(check.status))return check.message;
  if(check.status!=='search-ready')throw Error('Caller '+(slot+1)+': '+this.clean(check.message));
  const result=await e.page.evaluate(inspectSite,{click:true});return result.message;}
- async probe(slot){const e=await this.open(slot);const result=await e.page.evaluate(inspectSite);this.state(slot,{siteStatus:result.status,siteMessage:this.clean(result.message)});return {caller:slot+1,tokenStatus:this.states[slot].tokenStatus,...result};}
+ async probe(slot){const e=await this.open(slot);const result=await e.page.evaluate(inspectSite);this.state(slot,{siteStatus:result.status,siteMessage:this.clean(result.message)});const microphone=await e.page.evaluate(async()=>{try{const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});const active=stream.getAudioTracks().some(t=>t.readyState==='live');stream.getTracks().forEach(t=>t.stop());return {ok:active};}catch(error){return {ok:false,error:error.name+': '+error.message};}});return {caller:slot+1,tokenStatus:this.states[slot].tokenStatus,session:this.states[slot].session,microphone,...result};}
 
  sendMix(slot,samples){const e=this.slots[slot];if(!e||e.mixBusy||!this.mixer.enabled)return;e.mixBusy=true;e.page.evaluate(pcm=>window.__acceptMix?.(pcm),Array.from(samples)).catch(()=>{}).finally(()=>e.mixBusy=false);}
  async stop(){this.stopping=true;await Promise.all([0,1].map(i=>this.close(i)));await this.engine?.close();}
