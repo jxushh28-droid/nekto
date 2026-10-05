@@ -40,7 +40,7 @@ async function authorize(i,{force=false}={}){
  const result=await prepareTextSession(s.page,token,{reload});
  s.preparedToken=token;tokenStatus[i]=true;
  await s.context.storageState({path:data+'/slot-'+i+'.json'});
- console.log(JSON.stringify({event:'token_authorization',slot:labels[i],reason:result.reason,refreshed:result.refreshed,applications:result.applications}));
+ console.log(JSON.stringify({event:'token_authorization',slot:labels[i],reason:result.reason,refreshed:result.refreshed,applications:result.applications,results:result.results}));
 }
 async function connect(i){
  try{await open(i);await authorize(i);const s=slots[i];const state=await startConversation(s.page,{onState:state=>{s.status=state.status;s.detail=state.detail;}});console.log(JSON.stringify({event:'search_started',slot:labels[i],status:state.status}));}
@@ -90,7 +90,7 @@ const server=http.createServer(async(req,res)=>{try{
   }finally{locks.fill(null);tokenSetup=false;}
  }
  if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
- if(url.pathname==='/api/diagnostics'&&req.method==='GET'){const diagnostics=await Promise.all(slots.map(async(s,i)=>({label:labels[i],open:!!s,...(s?await s.page.evaluate(textSessionDiagnostics):{})})));return json(res,200,{slots:diagnostics});}
+ if(url.pathname==='/api/diagnostics'&&req.method==='GET'){const diagnostics=await Promise.all(slots.map(async(s,i)=>({label:labels[i],open:!!s,...(s?await s.page.evaluate(textSessionDiagnostics,{expectedToken:configuredTokens[i]}):{})})));return json(res,200,{slots:diagnostics});}
  const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send|inspect)$/);if(!match)return json(res,404,{error:'Not found'});
  const i=Number(match[1]),operation=match[2];
  if(req.method!=='POST')return json(res,405,{error:'POST required'});if(tokenSetup||locks[i])return json(res,409,{error:'Session is busy'});
