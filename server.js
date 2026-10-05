@@ -7,6 +7,7 @@ import {withToken,validateTokens} from './session.js';
 import {Transcript} from './transcript.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
+import {textSessionDiagnostics} from './diagnostics.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
 const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
@@ -47,7 +48,7 @@ async function connect(i){
 async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])return;s.busy=true;
  try{
   if(!new URL(s.page.url()).hostname.match(/(^|\.)nekto-me\.kz$/)){relay.update(i,{connected:false,epoch:null});return;}
-  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);if(s.status!==state.status)console.log(JSON.stringify({event:'session_status',slot:labels[i],status:state.status}));s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
+  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;s.verification=state.verification;relay.update(i,state);if(s.status!==state.status)console.log(JSON.stringify({event:'session_status',slot:labels[i],status:state.status,verification:state.verification}));s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
   const m=relay.members[i];for(const msg of state.messages){transcripts[i].add('incoming',msg.text);relay.incoming(i,msg.text);}
   while(m.queue.length&&!relay.valid(i,m.queue[0])){const dropped=m.queue.shift();const row=transcripts[i].items.find(r=>r.id===dropped.transcriptId);if(row)row.delivery='failed';}
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
@@ -78,7 +79,7 @@ const server=http.createServer(async(req,res)=>{try{
   const token=crypto.randomUUID();sessions.add(token);setTimeout(()=>sessions.delete(token),86400000).unref();res.setHeader('Set-Cookie','session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'+(process.env.NODE_ENV==='production'?'; Secure':''));return json(res,200,{ok:true});
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
- if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
+ if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],verification:slots[i]?.verification||null,status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
@@ -88,12 +89,14 @@ const server=http.createServer(async(req,res)=>{try{
   }finally{locks.fill(null);tokenSetup=false;}
  }
  if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
- const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send)$/);if(!match)return json(res,404,{error:'Not found'});
+ if(url.pathname==='/api/diagnostics'&&req.method==='GET'){const diagnostics=await Promise.all(slots.map(async(s,i)=>({label:labels[i],open:!!s,...(s?await s.page.evaluate(textSessionDiagnostics):{})})));return json(res,200,{slots:diagnostics});}
+ const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send|inspect)$/);if(!match)return json(res,404,{error:'Not found'});
  const i=Number(match[1]),operation=match[2];
  if(req.method!=='POST')return json(res,405,{error:'POST required'});if(tokenSetup||locks[i])return json(res,409,{error:'Session is busy'});
  locks[i]=true;try{
   const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));
-  if(operation==='connect'){relay.members[i].error='';if(!relay.enabled)relay.toggle(true);await connect(i);}
+  if(operation==='inspect'){await open(i);}
+  else if(operation==='connect'){relay.members[i].error='';if(!relay.enabled)relay.toggle(true);await connect(i);}
   else if(operation==='close'){slots[i]=null;relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);if(s){await s.context.storageState({path:data+'/slot-'+i+'.json'});await s.context.close();}}
   else{
    if(!s)throw new Error('Connect this chat first.');const b=await body(req);

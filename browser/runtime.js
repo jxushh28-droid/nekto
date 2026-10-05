@@ -13,11 +13,11 @@
    if(!initialized&&connected)for(const m of d.messages)seen.set(m.el,m.text);
   }
   initialized=true;state.connected=connected;
-  const blocking=['#mask_bad','#mask_bad_inet','#mask_cap','#mask_hcap','.swal2-popup'].map(s=>document.querySelector(s)).find(visible);
+  const blocking=d.blocking.element,verification=d.blocking.required;state.verification=d.blocking.verification;
   const searching=visible(document.querySelector('#search_company_loading'))||/\/searching(?:[/?]|$)/.test(location.hash);
   const start=visible(document.querySelector('#searchCompanyBtn'));
-  state.status=blocking?(/cap/.test(blocking.id)?'verification':'blocked'):connected?'connected':searching?'searching':start?'ready':visible(document.querySelector('.status-end'))?'ended':'loading';
-  state.detail=blocking?(blocking.innerText||blocking.textContent||'').trim().slice(0,260):'';
+  state.status=verification?'verification':blocking?'blocked':connected?'connected':searching?'searching':start?'ready':visible(document.querySelector('.status-end'))?'ended':'loading';
+  state.detail=verification?'Nekto запросил проверку CAPTCHA для этого сеанса.':blocking?(blocking.innerText||blocking.textContent||'').trim().slice(0,260):'';
   return d;
  }
  window.__textHost={

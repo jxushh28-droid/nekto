@@ -1,6 +1,13 @@
 'use strict';
 const NTGAdapter=(()=>{
-  const visible=el=>!!el&&el.isConnected&&el.getClientRects().length>0;
+  const visible=el=>{if(!el||!el.isConnected||!el.getClientRects().length)return false;const css=typeof getComputedStyle==='function'?getComputedStyle(el):el.style;return css?.visibility!=='hidden'&&css?.visibility!=='collapse'&&css?.display!=='none'&&css?.opacity!=='0';};
+  let clientStore=null;
+  function verification(){
+    if(!clientStore)clientStore=Array.from(document.querySelectorAll('*')).map(el=>el.__vue__?.$store).find(store=>store?.state?.system);
+    const system=clientStore?.state?.system;const known=typeof system?.captchaRequired==='boolean'&&typeof system?.hcaptchaRequired==='boolean';
+    return {known,captcha:known?system.captchaRequired:null,hcaptcha:known?system.hcaptchaRequired:null,authenticated:typeof system?.isAuth==='boolean'?system.isAuth:null};
+  }
+  function blocking(){const v=verification();return {verification:v,required:v.known?(v.captcha||v.hcaptcha):['#mask_cap','#mask_hcap'].some(s=>visible(document.querySelector(s))),element:['#mask_bad','#mask_bad_inet','.swal2-popup'].map(s=>document.querySelector(s)).find(visible)};}
   const query=s=>{try{return Array.from(document.querySelectorAll(s));}catch{return [];}};
   const one=s=>query(s).find(visible);
   const incomingCandidates=['.message.incoming','.message.received','.message.other','.message.companion','.message.stranger','.message--incoming','.chat-message.partner','.companion_message','.message_company','.msg.incoming','[data-direction="incoming"]','[data-sender="stranger"]'];
@@ -30,9 +37,9 @@ const NTGAdapter=(()=>{
     return parts.join(' > ');
   }
   function read(profile){
-    if(!profile)return {connected:false,messages:[]};
+    const blockedState=blocking();if(!profile)return {connected:false,messages:[],blocking:blockedState};
     const input=one(profile.input),send=one(profile.send);
-    const blocked=['#mask_cap','#mask_hcap','#mask_bad','#mask_bad_inet','.status-end','#search_company_loading','.swal2-popup'].some(s=>visible(document.querySelector(s)));
+    const blocked=blockedState.required||!!blockedState.element||['.status-end','#search_company_loading'].some(s=>visible(document.querySelector(s)));
     const searching=/\/searching(?:[/?]|$)/.test(location.hash);
     const connected=!!input&&!!send&&!input.disabled&&input.getAttribute('aria-disabled')!=='true'&&!blocked&&!searching;
     const matches=query(profile.incoming).filter(visible);
@@ -40,7 +47,7 @@ const NTGAdapter=(()=>{
       const textNode=(profile.textInside?el.querySelector(profile.textInside):el)||el;
       return {el,text:(textNode?.innerText||textNode?.textContent||'')};
     }).filter(m=>m.text.trim());
-    return {connected,input,send,messages};
+    return {connected,input,send,messages,blocking:blockedState};
   }
   const editable=input=>input.isContentEditable||input.getAttribute('contenteditable')==='true'||input.classList.contains('emojionearea-editor');
   function value(input){return editable(input)?input.textContent:input.value;}
