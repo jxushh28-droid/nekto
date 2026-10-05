@@ -3,7 +3,7 @@ const source=await readFile(new URL('../browser/adapter.js',import.meta.url),'ut
 function fixture(){
  const {window,document}=parseHTML('<html><body><section id="conversation"></section><div class="emojionearea-editor" contenteditable="true" aria-disabled="true"></div><button id="sendMessageBtn">Отправить</button></body></html>');
  window.HTMLElement.prototype.getClientRects=function(){return this.isConnected&&this.style.display!=='none'?[{}]:[];};
- const ctx={window:{},document,crypto:{randomUUID:()=>Math.random().toString(36)},location:{hash:'#/conversation'},CSS:{escape:s=>s},Event:window.Event,KeyboardEvent:window.Event,HTMLInputElement:window.HTMLInputElement,HTMLTextAreaElement:window.HTMLTextAreaElement,WeakMap,WeakSet,setTimeout};vm.createContext(ctx);vm.runInContext(source,ctx);
+ const ctx={window:{},document,crypto:{randomUUID:()=>Math.random().toString(36)},location:{hash:'#/conversation'},CSS:{escape:s=>s},Event:window.Event,KeyboardEvent:window.Event,HTMLInputElement:window.HTMLInputElement,HTMLTextAreaElement:window.HTMLTextAreaElement,WeakMap,WeakSet,setTimeout,clearTimeout,queueMicrotask};vm.createContext(ctx);vm.runInContext(source,ctx);
  const editor=document.querySelector('.emojionearea-editor'),sent=[];
  document.getElementById('sendMessageBtn').addEventListener('click',()=>{sent.push(editor.textContent);const bubble=document.createElement('div');bubble.className='mess_block self';const text=document.createElement('div');text.className='window_chat_dialog_text';text.textContent=editor.textContent;bubble.append(text);document.getElementById('conversation').append(bubble);editor.textContent='';});
  return {document,host:ctx.window.__textHost,sent,button:document.getElementById('sendMessageBtn'),connect(){editor.setAttribute('aria-disabled','false');},incoming(value){const bubble=document.createElement('div');bubble.className='mess_block';const text=document.createElement('div');text.className='window_chat_dialog_text';text.textContent=value;bubble.append(text);document.getElementById('conversation').append(bubble);return text;},editor};
@@ -18,3 +18,20 @@ test('inactive CAPTCHA container does not block a verified Vuex client',()=>{con
 test('actual site verification flags stop forwarding even without visible challenge text',()=>{const a=fixture();a.document.body.__vue__={$store:{state:{system:{captchaRequired:false,hcaptchaRequired:true,isAuth:true}}}};a.connect();const state=a.host.poll();assert.equal(state.status,'verification');assert.equal(state.connected,false);assert.equal(state.verification.hcaptcha,true);});
 test('transparent CAPTCHA placeholder is ignored by DOM fallback',()=>{const a=fixture();const mask=a.document.createElement('div');mask.id='mask_hcap';mask.style.opacity='0';a.document.body.append(mask);a.host.poll();a.connect();assert.equal(a.host.poll().status,'connected');});
 test('visible challenge still blocks when live site flags are unavailable',()=>{const a=fixture();const mask=a.document.createElement('div');mask.id='mask_hcap';a.document.body.append(mask);a.connect();assert.equal(a.host.poll().status,'verification');});
+function nativeFixture(){
+ const f=fixture(),listeners=new Set(),sent=[];
+ const store={state:{system:{isAuth:true,socketConnected:true,captchaRequired:false,hcaptchaRequired:false},user:{tokenModel:{id:7}},chat:{anonDialog:null}},subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);}};
+ const notify=()=>{for(const fn of [...listeners])fn({type:'chat/addMessage'});};
+ f.document.body.__vue__={$store:store,$socketActions:{anonMessage(id,message,randomId){sent.push({id,message});queueMicrotask(()=>{store.state.chat.anonDialog.messages.push({id:100,randomId,senderId:7,message});notify();});}}};
+ return {...f,store,nativeSent:sent,dialog(id,messages=[]){store.state.chat.anonDialog={id,messages,close:null};notify();},message(m){store.state.chat.anonDialog.messages.push(m);notify();}};
+}
+test('Vue conversation works without a DOM composer and preserves exact messages',async()=>{
+ const f=nativeFixture();f.editor.remove();f.button.remove();f.host.poll();f.dialog(10,[{id:1,randomId:'one',senderId:8,message:'  original\ntext  '}]);
+ const state=f.host.poll();assert.equal(state.connected,true);assert.equal(state.messages[0].text,'  original\ntext  ');
+ assert.equal(await f.host.send('private',state.epoch),'confirmed');assert.deepEqual(f.nativeSent,[{id:10,message:'private'}]);assert.equal(f.host.poll().messages.length,0);
+ f.message({id:2,randomId:'one',senderId:8,message:'  original\ntext  '});assert.equal(f.host.poll().messages.length,0);
+ f.message({id:3,senderId:'7',message:'own echo'});assert.equal(f.host.poll().messages.length,0);
+ f.dialog(11);assert.notEqual(f.host.poll().epoch,state.epoch);assert.equal(await f.host.send('stale',state.epoch),'changed');
+});
+test('actual verification or closed native dialog prevents sending',async()=>{const f=nativeFixture();f.host.poll();f.dialog(10);const s=f.host.poll();f.store.state.system.captchaRequired=true;assert.equal(f.host.poll().connected,false);assert.equal(await f.host.send('blocked',s.epoch),'changed');assert.equal(f.nativeSent.length,0);f.store.state.system.captchaRequired=false;f.store.state.chat.anonDialog.close=1;assert.equal(f.host.poll().status,'ended');});
+test('a submitted native message without a server acknowledgement is never confirmed or retried',async()=>{const f=nativeFixture();f.host.poll();f.dialog(10);const state=f.host.poll();let calls=0;f.document.body.__vue__.$socketActions.anonMessage=()=>{calls++;};assert.equal(await f.host.send('original',state.epoch),'unconfirmed');assert.equal(calls,1);});

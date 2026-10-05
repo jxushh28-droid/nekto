@@ -18,5 +18,14 @@ export function withToken(storage,token){
   }
  }
  for(const cookie of state.cookies||[]){if(cookie.domain.replace(/^\./,'')==='nekto-me.kz'&&authKey(cookie.name)){cookie.value=token;count++;}}
+ // The text client reads this specific key at startup. Preserve its settings.
+ let origin=state.origins.find(o=>o.origin===ORIGIN);
+ if(!origin){origin={origin:ORIGIN,localStorage:[]};state.origins.push(origin);}
+ let item=origin.localStorage.find(x=>x.name==='storage_v2');
+ if(!item){item={name:'storage_v2',value:'{}'};origin.localStorage.push(item);}
+ let value;try{value=JSON.parse(item.value);}catch{value={};}
+ if(!value||typeof value!=='object'||Array.isArray(value))value={};
+ if(!value.user||typeof value.user!=='object')value.user={};
+ value.user.authToken=token;item.value=JSON.stringify(value);
  return {state,count};
 }

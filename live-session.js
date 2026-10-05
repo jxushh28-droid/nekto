@@ -4,6 +4,10 @@ export function authorizeLiveToken({token,timeout=10000}){
  const app=Array.from(document.querySelectorAll('*')).map(el=>el.__vue__).find(vm=>vm?.$store?.state?.user&&typeof(vm.$socketActions||vm.$store.$socketActions)?.authorize==='function');
  if(!app)return {ok:false,reason:'client-not-ready'};
  const store=app.$store,actions=app.$socketActions||store.$socketActions;
+ let saved=false;try{saved=JSON.parse(localStorage.getItem('storage_v2'))?.user?.authToken===token;}catch{}
+ const current=store.state;
+ if(current.system?.isAuth===true&&current.system?.socketConnected===true&&current.user.authToken===token&&current.user.tokenModel?.tokenInfo?.authToken===token&&saved)return {ok:true,reason:'already-authorized'};
+ if(current.system?.captchaRequired||current.system?.hcaptchaRequired)return {ok:false,reason:'verification-required'};
  return new Promise(resolve=>{
   let finished=false,unsubscribe=()=>{},timer;
   const finish=result=>{if(finished)return;finished=true;clearTimeout(timer);unsubscribe();resolve(result);};

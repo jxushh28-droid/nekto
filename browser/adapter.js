@@ -2,6 +2,7 @@
 const NTGAdapter=(()=>{
   const visible=el=>{if(!el||!el.isConnected||!el.getClientRects().length)return false;const css=typeof getComputedStyle==='function'?getComputedStyle(el):el.style;return css?.visibility!=='hidden'&&css?.visibility!=='collapse'&&css?.display!=='none'&&css?.opacity!=='0';};
   let clientStore=null;
+  function client(){return Array.from(document.querySelectorAll('*')).map(el=>el.__vue__).find(vm=>vm?.$store?.state?.chat&&vm.$store.state.user);}
   function verification(){
     if(!clientStore)clientStore=Array.from(document.querySelectorAll('*')).map(el=>el.__vue__?.$store).find(store=>store?.state?.system);
     const system=clientStore?.state?.system;const known=typeof system?.captchaRequired==='boolean'&&typeof system?.hcaptchaRequired==='boolean';
@@ -37,7 +38,13 @@ const NTGAdapter=(()=>{
     return parts.join(' > ');
   }
   function read(profile){
-    const blockedState=blocking();if(!profile)return {connected:false,messages:[],blocking:blockedState};
+    const blockedState=blocking(),vm=client(),store=vm?.$store,dialog=store?.state.chat.anonDialog;
+    if(store){const userId=store.state.user.tokenModel?.id,system=store.state.system;
+      const connected=dialog?.id!=null&&!dialog.close&&userId!=null&&system?.isAuth===true&&system?.socketConnected===true&&!blockedState.required&&!blockedState.element;
+      const messages=(dialog?.messages||[]).filter(m=>m.senderId!=null&&userId!=null&&String(m.senderId)!==String(userId)&&typeof m.message==='string'&&m.message.trim()).map(m=>({el:m,text:m.message,key:m.randomId!=null?'random:'+m.randomId:m.id!=null?'id:'+m.id:null}));
+      return {connected,messages,blocking:blockedState,native:true,dialog,store,actions:vm.$socketActions||store.$socketActions};
+    }
+    if(!profile)return {connected:false,messages:[],blocking:blockedState};
     const input=one(profile.input),send=one(profile.send);
     const blocked=blockedState.required||!!blockedState.element||['.status-end','#search_company_loading'].some(s=>visible(document.querySelector(s)));
     const searching=/\/searching(?:[/?]|$)/.test(location.hash);
@@ -60,5 +67,5 @@ const NTGAdapter=(()=>{
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.dispatchEvent(new Event('change',{bubbles:true}));
   }
-  return {visible,one,detect,selector,read,value,setValue};
+  return {client,visible,one,detect,selector,read,value,setValue};
 })();

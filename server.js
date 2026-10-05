@@ -7,6 +7,7 @@ import {withToken,validateTokens} from './session.js';
 import {Transcript} from './transcript.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
+import {loadTokens,saveTokens} from './token-config.js';
 import {textSessionDiagnostics} from './diagnostics.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
@@ -15,7 +16,7 @@ let configuredTokens=[null,null],tokenSetup=false;
 const tokenStatus=[false,false],transcripts=[new Transcript(),new Transcript()];
 relay.toggle(true);
 const safeError=e=>{let text=String(e?.message||e);for(const token of configuredTokens)if(token)text=text.split(token).join('[redacted]');return text.slice(0,180);};
-const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});
+const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});configuredTokens=await loadTokens(data);
 let browser=null,launching=null;
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/chat/';
@@ -34,8 +35,8 @@ async function open(i){
 }
 function operationError(i,e){const error=safeError(e);const changed=relay.members[i].error!==error;relay.members[i].error=error;if(changed)console.warn(JSON.stringify({event:'session_operation_failed',slot:labels[i],error}));return error;}
 async function authorize(i,{force=false}={}){
- const s=slots[i],token=configuredTokens[i];if(!token||(!force&&s.preparedToken===token))return;
- const reload=s.bootstrapToken!==token;s.bootstrapToken=token;s.preparedToken=null;s.status='loading';tokenStatus[i]=false;
+ const s=slots[i],token=configuredTokens[i];if(!token)return;
+ const reload=false;s.bootstrapToken=token;s.preparedToken=null;s.status='loading';tokenStatus[i]=false;
  const result=await prepareTextSession(s.page,token,{reload});
  s.preparedToken=token;tokenStatus[i]=true;
  await s.context.storageState({path:data+'/slot-'+i+'.json'});
@@ -54,7 +55,7 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
    if(item.source!=null){const source=slots[item.source];const current=source?await source.page.evaluate(()=>window.__textHost?.status()):null;if(!current?.connected||current.epoch!==item.sourceEpoch){m.queue.shift();return;}}
    const result=await s.page.evaluate(({text,epoch})=>window.__textHost.send(text,epoch),{text:item.text,epoch:item.targetEpoch});
-   if(result==='submitted'){s.lastSend=Date.now();m.queue.shift();let cleared=false;for(let n=0;n<10;n++){await new Promise(r=>setTimeout(r,100));cleared=await s.page.evaluate(()=>window.__textHost.cleared());if(cleared)break;}if(cleared){m.sent++;m.error='';if(item.transcriptId){const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='sent';}else transcripts[i].add('relay',item.text);}else{const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='The site did not confirm sending this message. Reconnect this chat before retrying.';}}
+   if(result==='confirmed'||result==='submitted'){s.lastSend=Date.now();m.queue.shift();let cleared=result==='confirmed';for(let n=0;n<10&&!cleared;n++){await new Promise(r=>setTimeout(r,100));cleared=await s.page.evaluate(()=>window.__textHost.cleared());if(cleared)break;}if(cleared){m.sent++;m.error='';if(item.transcriptId){const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='sent';}else transcripts[i].add('relay',item.text);}else{const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='The site did not confirm sending this message. Reconnect this chat before retrying.';}}
    else if(result==='draft'||result==='wait')m.error=result==='draft'?'Delivery paused: this session already contains an unsent draft. Reconnect to clear it.':'Waiting for the site to enable sending.';
    else{m.queue.shift();const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='Delivery stopped: '+result;}
   }
@@ -84,7 +85,7 @@ const server=http.createServer(async(req,res)=>{try{
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
   try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);tokenStatus[i]=false;}
-   configuredTokens=values;relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await open(i);await authorize(i,{force:true});await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
+   configuredTokens=await saveTokens(data,values);relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await open(i);await authorize(i,{force:true});await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
    return json(res,200,{ok:results.every(r=>r.ok),results});
   }finally{locks.fill(null);tokenSetup=false;}
  }

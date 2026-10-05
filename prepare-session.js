@@ -1,6 +1,6 @@
 import {authorizeLiveToken} from './live-session.js';
-export function textClientReady(){return Array.from(document.querySelectorAll('*')).some(el=>el.__vue__?.$store?.state?.user&&typeof((el.__vue__.$socketActions||el.__vue__.$store.$socketActions)?.authorize)==='function');}
-export async function prepareTextSession(page,token,{reload=true}={}){
+export function textClientReady(){return Array.from(document.querySelectorAll('*')).some(el=>el.__vue__?.$store?.state?.user&&(el.__vue__.$store.state.system?.isAuth===true||el.__vue__.$store.state.system?.captchaRequired||el.__vue__.$store.state.system?.hcaptchaRequired)&&typeof((el.__vue__.$socketActions||el.__vue__.$store.$socketActions)?.authorize)==='function');}
+export async function prepareTextSession(page,token,{reload=false}={}){
  const apply=async()=>{
   await page.waitForFunction(textClientReady,null,{timeout:20000});
   const result=await page.evaluate(authorizeLiveToken,{token});
