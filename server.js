@@ -24,7 +24,7 @@ async function getBrowser(){if(browser?.isConnected())return browser;if(!launchi
 async function open(i){
  if(slots[i])return;const b=await getBrowser();let saved;try{saved=JSON.parse(await readFile(data+'/slot-'+i+'.json','utf8'));}catch{}
  const token=configuredTokens[i];
- if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;}
+ if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;if(s)s.preparedToken=null;}
  const context=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU',storageState:saved});
  await context.addInitScript({content:injection});const page=await context.newPage();
  const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0,status:'loading',detail:'',bootstrapToken:null,preparedToken:null};slots[i]=slot;
@@ -35,12 +35,12 @@ async function open(i){
 }
 function operationError(i,e){const error=safeError(e);const changed=relay.members[i].error!==error;relay.members[i].error=error;if(changed)console.warn(JSON.stringify({event:'session_operation_failed',slot:labels[i],error}));return error;}
 async function authorize(i,{force=false}={}){
- const s=slots[i],token=configuredTokens[i];if(!token)return;
+ const s=slots[i],token=configuredTokens[i];if(!token||s.preparedToken===token)return;
  const reload=false;s.bootstrapToken=token;s.preparedToken=null;s.status='loading';tokenStatus[i]=false;
  const result=await prepareTextSession(s.page,token,{reload});
  s.preparedToken=token;tokenStatus[i]=true;
  await s.context.storageState({path:data+'/slot-'+i+'.json'});
- console.log(JSON.stringify({event:'token_authorization',slot:labels[i],reason:result.reason,refreshed:result.refreshed}));
+ console.log(JSON.stringify({event:'token_authorization',slot:labels[i],reason:result.reason,refreshed:result.refreshed,applications:result.applications}));
 }
 async function connect(i){
  try{await open(i);await authorize(i);const s=slots[i];const state=await startConversation(s.page,{onState:state=>{s.status=state.status;s.detail=state.detail;}});console.log(JSON.stringify({event:'search_started',slot:labels[i],status:state.status}));}
@@ -84,8 +84,8 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
-  try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);tokenStatus[i]=false;}
-   configuredTokens=await saveTokens(data,values);relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await open(i);await authorize(i,{force:true});await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
+  try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);tokenStatus[i]=false;if(s)s.preparedToken=null;}
+   configuredTokens=await saveTokens(data,values);relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
    return json(res,200,{ok:results.every(r=>r.ok),results});
   }finally{locks.fill(null);tokenSetup=false;}
  }
