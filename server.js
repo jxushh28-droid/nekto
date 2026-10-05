@@ -6,6 +6,7 @@ import {Relay,labels} from './relay.js';
 import {withToken,validateTokens} from './session.js';
 import {Transcript} from './transcript.js';
 import {startConversation} from './connection.js';
+import {authorizeLiveToken} from './live-session.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
 const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
@@ -21,23 +22,20 @@ async function getBrowser(){if(browser?.isConnected())return browser;if(!launchi
 async function open(i){
  if(slots[i])return;const b=await getBrowser();let saved;try{saved=JSON.parse(await readFile(data+'/slot-'+i+'.json','utf8'));}catch{}
  const token=configuredTokens[i];
- if(token){
-  let imported=withToken(saved,token);
-  if(!imported.count){
-   const probe=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU'});
-   try{const probePage=await probe.newPage();await probePage.goto(site,{waitUntil:'domcontentloaded',timeout:45000});
-    for(let tries=0;tries<15;tries++){saved=await probe.storageState();imported=withToken(saved,token);if(imported.count)break;await new Promise(r=>setTimeout(r,1000));}
-   }finally{await probe.close();}
-  }
-  if(!imported.count)throw new Error('Text chat did not expose a supported authToken field. The site has not created a reusable text-session token. Try connecting normally, then reapply the token.');
-  saved=imported.state;tokenStatus[i]=true;
- }
+ if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;}
  const context=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU',storageState:saved});
  await context.addInitScript({content:injection});const page=await context.newPage();
  const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0,status:'loading',detail:''};slots[i]=slot;
  page.on('dialog',dialog=>dialog.dismiss().catch(()=>{}));page.on('popup',p=>p.close().catch(()=>{}));
  page.on('crash',()=>{relay.members[i].error='Browser page crashed. Close and reopen this session.';relay.update(i,{connected:false,epoch:null});});
- try{await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});await context.storageState({path:data+'/slot-'+i+'.json'});}catch(e){slots[i]=null;await context.close().catch(()=>{});operationError(i,e);throw e;}finally{slot.opening=false;}
+ try{await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});
+  if(token){await page.waitForFunction(()=>Array.from(document.querySelectorAll('*')).some(el=>el.__vue__?.$store?.state?.user&&typeof((el.__vue__.$socketActions||el.__vue__.$store.$socketActions)?.authorize)==='function'),null,{timeout:20000});
+   const result=await page.evaluate(authorizeLiveToken,{token});
+   console.log(JSON.stringify({event:'token_authorization',slot:labels[i],reason:result.reason}));
+   if(!result.ok)throw new Error(result.reason==='token-replaced'?'Nekto replaced the supplied token during authorization. Reapply a valid text-session token.':'Text-session authorization failed: '+result.reason);
+   tokenStatus[i]=true;
+  }
+  await context.storageState({path:data+'/slot-'+i+'.json'});}catch(e){slots[i]=null;await context.close().catch(()=>{});operationError(i,e);throw e;}finally{slot.opening=false;}
 }
 function operationError(i,e){const error=safeError(e);const changed=relay.members[i].error!==error;relay.members[i].error=error;if(changed)console.warn(JSON.stringify({event:'session_operation_failed',slot:labels[i],error}));return error;}
 async function connect(i){

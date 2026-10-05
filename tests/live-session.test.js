@@ -1,0 +1,12 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import {authorizeLiveToken} from '../live-session.js';
+function fixture({accepted='requested-token',respond=true}={}){
+ let listener,unsubscribed=0,saved='old-token';const calls=[];
+ const store={state:{user:{authToken:'old-token'},system:{isAuth:true}},subscribe(fn){listener=fn;return()=>{unsubscribed++;listener=null;};},commit(type,value){calls.push(type);assert.equal(type,'user/setAuthToken');store.state.user.authToken=value;saved=value;listener({type});}};
+ const actions={authorize(){calls.push('authorize');if(respond)queueMicrotask(()=>{store.state.user.authToken=accepted;saved=accepted;listener?.({type:'user/socket_auth.successToken'});});}};
+ const context={document:{querySelectorAll:()=>[{__vue__:{$store:store,$socketActions:actions}}]},localStorage:{getItem:()=>JSON.stringify({user:{authToken:saved}})},setTimeout,clearTimeout,Promise};vm.createContext(context);
+ return {run:arg=>vm.runInContext('('+authorizeLiveToken.toString()+')',context)(arg),calls,get unsubscribed(){return unsubscribed;},store};
+}
+test('live Vuex token is committed before normal authorization and confirmed by response',async()=>{const f=fixture();const result=await f.run({token:'requested-token',timeout:50});assert.equal(result.ok,true);assert.equal(result.reason,'accepted');assert.deepEqual(f.calls,['user/setAuthToken','authorize']);assert.equal(f.unsubscribed,1);});
+test('server replacement is reported and is never overridden',async()=>{const f=fixture({accepted:'replacement-token'});const result=await f.run({token:'requested-token',timeout:50});assert.equal(result.ok,false);assert.equal(result.reason,'token-replaced');assert.equal(f.store.state.user.authToken,'replacement-token');assert.equal(f.unsubscribed,1);});
+test('matching saved token and an old authenticated flag do not count as a server response',async()=>{const f=fixture({respond:false});const result=await f.run({token:'requested-token',timeout:5});assert.equal(result.ok,false);assert.equal(result.reason,'authorization-timeout');assert.equal(f.unsubscribed,1);});
+test('missing live client is reported without injection',()=>{const context={document:{querySelectorAll:()=>[]}};vm.createContext(context);const result=vm.runInContext('('+authorizeLiveToken.toString()+')',context)({token:'requested-token'});assert.equal(result.ok,false);assert.equal(result.reason,'client-not-ready');});
