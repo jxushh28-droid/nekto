@@ -5,6 +5,7 @@ import {chromium} from 'playwright';
 import {Relay,labels} from './relay.js';
 import {withToken,validateTokens} from './session.js';
 import {Transcript} from './transcript.js';
+import {startConversation} from './connection.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
 const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
@@ -36,30 +37,18 @@ async function open(i){
  const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0,status:'loading',detail:''};slots[i]=slot;
  page.on('dialog',dialog=>dialog.dismiss().catch(()=>{}));page.on('popup',p=>p.close().catch(()=>{}));
  page.on('crash',()=>{relay.members[i].error='Browser page crashed. Close and reopen this session.';relay.update(i,{connected:false,epoch:null});});
- try{await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}catch(e){relay.members[i].error=safeError(e);}finally{slot.opening=false;}
+ try{await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});await context.storageState({path:data+'/slot-'+i+'.json'});}catch(e){slots[i]=null;await context.close().catch(()=>{});operationError(i,e);throw e;}finally{slot.opening=false;}
 }
+function operationError(i,e){const error=safeError(e);const changed=relay.members[i].error!==error;relay.members[i].error=error;if(changed)console.warn(JSON.stringify({event:'session_operation_failed',slot:labels[i],error}));return error;}
 async function connect(i){
  await open(i);const s=slots[i];
- for(let attempt=0;attempt<20;attempt++){
-  const state=await s.page.evaluate(()=>window.__textHost?.status());
-  if(state){s.status=state.status;s.detail=state.detail;
-   if(state.connected||state.status==='searching')return;
-   if(['verification','blocked'].includes(state.status))throw new Error(state.detail||'The site requires verification.');
-  }
-  const start=s.page.locator('#searchCompanyBtn');
-  if(await start.isVisible()){
-   const cookies=s.page.locator('#acceptCookies');if(await cookies.isVisible())await cookies.click({timeout:3000});
-   await start.click({timeout:5000});s.status='searching';s.detail='';return;
-  }
-  if(state?.status==='ended'){await s.page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}
-  await new Promise(r=>setTimeout(r,500));
- }
- throw new Error('The site did not show its Connect button.');
+ try{const state=await startConversation(s.page,{onState:state=>{s.status=state.status;s.detail=state.detail;}});console.log(JSON.stringify({event:'search_started',slot:labels[i],status:state.status}));}
+ catch(e){operationError(i,e);throw e;}
 }
 async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])return;s.busy=true;
  try{
   if(!new URL(s.page.url()).hostname.match(/(^|\.)nekto-me\.kz$/)){relay.update(i,{connected:false,epoch:null});return;}
-  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
+  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);if(s.status!==state.status)console.log(JSON.stringify({event:'session_status',slot:labels[i],status:state.status}));s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
   const m=relay.members[i];for(const msg of state.messages){transcripts[i].add('incoming',msg.text);relay.incoming(i,msg.text);}
   while(m.queue.length&&!relay.valid(i,m.queue[0])){const dropped=m.queue.shift();const row=transcripts[i].items.find(r=>r.id===dropped.transcriptId);if(row)row.delivery='failed';}
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
@@ -70,7 +59,7 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
    else{m.queue.shift();const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='Delivery stopped: '+result;}
   }
   if(Date.now()-s.saveAt>60000){s.saveAt=Date.now();await s.context.storageState({path:data+'/slot-'+i+'.json'});}
- }catch(e){relay.members[i].error=safeError(e);relay.update(i,{connected:false,epoch:null});}finally{s.busy=false;}
+ }catch(e){operationError(i,e);relay.update(i,{connected:false,epoch:null});}finally{s.busy=false;}
 }
 setInterval(()=>{for(let i=0;i<2;i++)void tick(i);},700);
 function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
@@ -90,12 +79,12 @@ const server=http.createServer(async(req,res)=>{try{
   const token=crypto.randomUUID();sessions.add(token);setTimeout(()=>sessions.delete(token),86400000).unref();res.setHeader('Set-Cookie','session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'+(process.env.NODE_ENV==='production'?'; Secure':''));return json(res,200,{ok:true});
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
- if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
+ if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
   try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s){while(s.busy)await new Promise(r=>setTimeout(r,50));await s.context.close();slots[i]=null;}relay.update(i,{connected:false,epoch:null});tokenStatus[i]=false;}
-   configuredTokens=values;relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=safeError(e);configuredTokens[i]=null;tokenStatus[i]=false;results.push({slot:i,ok:false,error});}}
+   configuredTokens=values;relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
    return json(res,200,{ok:results.every(r=>r.ok),results});
   }finally{locks.fill(null);tokenSetup=false;}
  }
@@ -114,7 +103,7 @@ const server=http.createServer(async(req,res)=>{try{
    relay.update(i,current);transcripts[i].reset(current.epoch);if(relay.members[i].queue.length>=40)throw new Error('Message queue is full. Wait before sending again.');const item=transcripts[i].add('private',b.text,'queued');relay.enqueue(i,{text:b.text,kind:'private',transcriptId:item.id});
   }
   return json(res,200,{ok:true});
- }finally{locks[i]=null;}
+ }catch(e){if(operation!=='connect')operationError(i,e);throw e;}finally{locks[i]=null;}
  }catch(e){json(res,400,{error:safeError(e)});}});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
 async function shutdown(){relay.toggle(false);for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
