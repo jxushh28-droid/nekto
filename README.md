@@ -14,3 +14,6 @@ The panel runs in Android Chrome; this is a hosted web app, not an APK. Only the
 Hosting does not bypass access blocks or CAPTCHA. Nekto can reject a datacenter address or automated browser, and site layout changes can require adapter updates. CAPTCHA is completed by the operator. Runtime health is distinct from successfully connecting to live Nekto conversations.
 
 Source history preserves the previous voice bot; a backup branch also points to its last commit.
+
+## Import two existing text sessions
+After signing into the dashboard, enter your own two distinct authTokens in the session form. Applying them closes current conversations, pauses forwarding, and opens two isolated sessions. Tokens are sent only in the authenticated POST body, never URL parameters or logs, and cleared from the form after submission. The app replaces authToken fields observed in the text site's saved storage before loading its client. It does not guess the voice-chat storage key or alter CAPTCHA controls. If the text client has not created its session storage yet, an initial page load discovers its format. Tokens persist in the existing protected server-side browser storage. Importing a token does not prove the server accepted it and does not guarantee verification is skipped. Start both text chats on Screen, then enable forwarding.
