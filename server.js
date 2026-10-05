@@ -5,7 +5,7 @@ import {chromium} from 'playwright';
 import {Relay,labels} from './relay.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
-const relay=new Relay(),slots=Array(4).fill(null),locks=Array(4).fill(null),sessions=new Set();
+const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
 const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});
 let browser=null,launching=null;
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
@@ -25,7 +25,6 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
   if(!new URL(s.page.url()).hostname.match(/(^|\.)nekto-me\.kz$/)){relay.update(i,{connected:false,epoch:null});return;}
   const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);
   const m=relay.members[i];for(const msg of state.messages)relay.incoming(i,msg.text);
-  if(relay.enabled&&m.connected&&!m.greeted){relay.enqueue(i,{text:'Привет! Ты '+labels[i]+'. Это общий текстовый чат.'});m.greeted=true;}
   while(m.queue.length&&!relay.valid(i,m.queue[0]))m.queue.shift();
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
    const result=await s.page.evaluate(({text,epoch})=>window.__textHost.send(text,epoch),{text:item.text,epoch:item.targetEpoch});
@@ -36,7 +35,7 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
   if(Date.now()-s.saveAt>60000){s.saveAt=Date.now();await s.context.storageState({path:data+'/slot-'+i+'.json'});}
  }catch(e){relay.members[i].error=e.message.slice(0,180);relay.update(i,{connected:false,epoch:null});}finally{s.busy=false;}
 }
-setInterval(()=>{for(let i=0;i<4;i++)void tick(i);},700);
+setInterval(()=>{for(let i=0;i<2;i++)void tick(i);},700);
 function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
 async function body(req){let chunks=[],size=0;for await(const chunk of req){size+=chunk.length;if(size>12000)throw new Error('Request too large');chunks.push(chunk);}return JSON.parse(Buffer.concat(chunks).toString()||'{}');}
 const failures=new Map();
@@ -56,7 +55,7 @@ const server=http.createServer(async(req,res)=>{try{
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
  if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],opening:!!slots[i]?.opening}))});
  if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
- const match=url.pathname.match(/^\/api\/slot\/([0-3])\/(open|close|screen|action)$/);if(!match)return json(res,404,{error:'Not found'});
+ const match=url.pathname.match(/^\/api\/slot\/([01])\/(open|close|screen|action)$/);if(!match)return json(res,404,{error:'Not found'});
  const i=Number(match[1]),operation=match[2];if(operation==='screen'&&req.method==='GET'){
   if(!slots[i])return json(res,409,{error:'Open session first'});const image=await slots[i].page.screenshot({type:'jpeg',quality:65,timeout:10000});res.setHeader('Content-Type','image/jpeg');return res.end(image);}
  if(req.method!=='POST')return json(res,405,{error:'POST required'});if(locks[i])return json(res,409,{error:'Session is busy'});

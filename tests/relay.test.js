@@ -1,6 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {Relay} from '../relay.js';
-function ready(){const r=new Relay();for(let i=0;i<4;i++)r.update(i,{connected:true,epoch:'e'+i});r.toggle(true);return r;}
-test('four-way forwarding excludes sender and labels messages',()=>{const r=ready();r.incoming(0,'hello');assert.equal(r.members[0].queue.length,0);for(const m of r.members.slice(1))assert.equal(m.queue[0].text,'hello - Первый');});
+function ready(){const r=new Relay();for(let i=0;i<2;i++)r.update(i,{connected:true,epoch:'e'+i});r.toggle(true);return r;}
+test('two-way forwarding preserves original text exactly',()=>{const r=ready();assert.equal(r.members.length,2);const text='  hello\nПривет 😀  ';r.incoming(0,text);assert.equal(r.members[0].queue.length,0);assert.equal(r.members[1].queue[0].text,text);r.incoming(1,'reply');assert.equal(r.members[0].queue[0].text,'reply');});
+test('connection alone queues no extra messages',()=>{const r=ready();assert.ok(r.members.every(m=>m.queue.length===0));});
 test('conversation changes invalidate messages on both sides',()=>{const r=ready();r.incoming(0,'old');const item=r.members[1].queue[0];r.update(0,{connected:true,epoch:'new'});assert.equal(r.valid(1,item),false);r.update(1,{connected:true,epoch:'other'});assert.equal(r.members[1].queue.length,0);});
 test('pause clears pending deliveries and never replays them',()=>{const r=ready();r.incoming(0,'old');const item=r.members[1].queue[0];r.toggle(false);r.toggle(true);assert.equal(r.valid(1,item),false);assert.equal(r.members[1].queue.length,0);});
 test('bounded queues and expiration',()=>{const r=ready();for(let i=0;i<50;i++)r.incoming(0,'x');assert.equal(r.members[1].queue.length,40);r.members[1].queue[0].created-=31000;assert.equal(r.valid(1,r.members[1].queue[0]),false);});

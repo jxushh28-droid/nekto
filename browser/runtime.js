@@ -12,7 +12,7 @@
   state.connected=connected;return d;
  }
  window.__textHost={
-  poll(){const d=read(),messages=[];for(const m of d.messages){if(seen.has(m.el))continue;seen.add(m.el);if(connected)messages.push({id:doc+':'+(++counter),text:m.text.slice(0,4000)});}return {...state,messages};},
+  poll(){const d=read(),messages=[];for(const m of d.messages){if(seen.has(m.el))continue;seen.add(m.el);if(connected)messages.push({id:doc+':'+(++counter),text:m.text});}return {...state,messages};},
   send(text,epoch){const d=read();if(!connected||state.epoch!==epoch)return 'changed';if(NTGAdapter.value(d.input)?.trim())return 'draft';if(d.send.disabled)return 'wait';if(text.length>(d.input.maxLength>0?d.input.maxLength:4000))return 'too long';NTGAdapter.setValue(d.input,text);d.send.click();return 'submitted';},
   cleared(){const d=read();return !d.input||!NTGAdapter.value(d.input)?.trim();},
   status(){read();return {...state};}

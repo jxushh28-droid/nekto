@@ -1,8 +1,8 @@
 # Nekto Text Hub
 
-Hosted, phone-friendly dashboard replacing the previous Discord voice bot. Four isolated Chromium browser contexts connect to https://nekto-me.kz/chat/. Open sessions, select Screen, complete verification and start each text conversation manually, then enable forwarding.
+Hosted, phone-friendly dashboard replacing the previous Discord voice bot. Two isolated Chromium browser contexts connect to https://nekto-me.kz/chat/. Open sessions, select Screen, complete verification and start each text conversation manually, then enable forwarding.
 
-Incoming messages are sent to the other connected sessions as `message - Первый` (through Четвёртый). Each new conversation receives a greeting identifying its number and explaining the group chat. Pausing drops queued messages. Conversation changes invalidate old deliveries; queues cap at 40 items, expire after 30 seconds, and sends are spaced by 1.1 seconds. Existing drafts are preserved. Conversation contents are not written to application logs.
+Incoming messages are forwarded unchanged to the other connected session, in both directions. No greetings, prefixes, suffixes, or other automatic messages are sent. Pausing drops queued messages. Conversation changes invalidate old deliveries; queues cap at 40 items, expire after 30 seconds, and sends are spaced by 1.1 seconds. Existing drafts are preserved. Conversation contents are not written to application logs.
 
 ## Deployment
 Dockerfile includes Playwright's matching Chromium binaries. Set a private `DASHBOARD_PASSWORD` of at least 16 characters, `PORT` (Railway supplies this), and optionally `TEXT_DATA_DIR=/data/text-host`. Attach a volume at /data for session cookies and local storage. Existing voice-session data remains untouched. The old Discord token and voice settings are unused.

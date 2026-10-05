@@ -38,8 +38,8 @@ const NTGAdapter=(()=>{
     const matches=query(profile.incoming).filter(visible);
     const messages=matches.filter(el=>!matches.some(other=>other!==el&&other.contains(el))).map(el=>{
       const textNode=(profile.textInside?el.querySelector(profile.textInside):el)||el;
-      return {el,text:(textNode?.innerText||textNode?.textContent||'').trim()};
-    }).filter(m=>m.text);
+      return {el,text:(textNode?.innerText||textNode?.textContent||'')};
+    }).filter(m=>m.text.trim());
     return {connected,input,send,messages};
   }
   const editable=input=>input.isContentEditable||input.getAttribute('contenteditable')==='true'||input.classList.contains('emojionearea-editor');
