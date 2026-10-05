@@ -24,7 +24,7 @@ async function getBrowser(){if(browser?.isConnected())return browser;if(!launchi
 async function open(i){
  if(slots[i])return;const b=await getBrowser();let saved;try{saved=JSON.parse(await readFile(data+'/slot-'+i+'.json','utf8'));}catch{}
  const token=configuredTokens[i];
- if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;if(s)s.preparedToken=null;}
+ if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;}
  const context=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU',storageState:saved});
  await context.addInitScript({content:injection});const page=await context.newPage();
  const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0,status:'loading',detail:'',bootstrapToken:null,preparedToken:null};slots[i]=slot;
