@@ -1,1 +1,1 @@
-{"name":"nekto-text-host","version":"3.0.0","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test"},"dependencies":{"playwright":"1.58.2"}}
+{"name":"nekto-text-host","version":"3.0.0","private":true,"type":"module","scripts":{"start":"node server.js","test":"node --test"},"dependencies":{"playwright":"1.58.2"},"devDependencies":{"linkedom":"^0.18.12"}}

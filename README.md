@@ -1,19 +1,19 @@
 # Nekto Text Hub
 
-Hosted, phone-friendly dashboard replacing the previous Discord voice bot. Two isolated Chromium browser contexts connect to https://nekto-me.kz/chat/. Open sessions, select Screen, complete verification and start each text conversation manually, then enable forwarding.
+A hosted, phone-friendly dashboard with two native conversation panels. Click Connect for A and B, or Connect both, to start the site's searches automatically. Each panel shows that stranger's messages and what was sent to them. Forwarding starts automatically when both strangers are connected. There are no screenshots or remote browser controls.
 
-Incoming messages are forwarded unchanged to the other connected session, in both directions. No greetings, prefixes, suffixes, or other automatic messages are sent. Pausing drops queued messages. Conversation changes invalidate old deliveries; queues cap at 40 items, expire after 30 seconds, and sends are spaced by 1.1 seconds. Existing drafts are preserved. Conversation contents are not written to application logs.
+Incoming messages are forwarded unchanged to the other connected session. No greetings, labels, prefixes, suffixes, or extra automatic messages are sent. Each panel's message box sends only to that panel's stranger; operator messages are not copied to the other side. Enter sends and Shift+Enter inserts a newline. Conversation history is held in memory and cleared when that conversation changes.
+
+Two isolated Chromium contexts run the text client at https://nekto-me.kz/chat/. Conversation changes invalidate old deliveries, queues cap at 40 messages and expire after 30 seconds, and sends are spaced by 1.1 seconds. Incoming bubbles are tracked separately from outgoing bubbles to prevent loops. The sender waits for the client editor to synchronize before clicking Send, then checks that the input clears. Existing drafts are preserved. Chat text is not written to application logs.
 
 ## Deployment
-Dockerfile includes Playwright's matching Chromium binaries. Set a private `DASHBOARD_PASSWORD` of at least 16 characters, `PORT` (Railway supplies this), and optionally `TEXT_DATA_DIR=/data/text-host`. Attach a volume at /data for session cookies and local storage. Existing voice-session data remains untouched. The old Discord token and voice settings are unused.
 
-Start: `npm install && DASHBOARD_PASSWORD=your-private-long-password npm start`. Tests: `npm test`.
+The Dockerfile includes Playwright's matching Chromium binaries. Set a private `DASHBOARD_PASSWORD` of at least 16 characters and optionally `TEXT_DATA_DIR=/data/text-host`. Railway supplies `PORT`. Attach a volume at /data for session cookies and local storage. The previous voice bot's settings are unused; its source remains in Git history and a backup branch.
 
-The panel runs in Android Chrome; this is a hosted web app, not an APK. Only the selected screen is streamed as periodic JPEG images. Click the remote screen to focus a field, use the text box to type, and Enter to confirm. Scroll controls support long pages and verification dialogs.
+Run `npm install`, then `DASHBOARD_PASSWORD=your-private-long-password npm start`. Run `npm test` for adapter, bidirectional forwarding, private-message isolation, stale-conversation, and token-storage tests. The dashboard works in Android Chrome as a hosted web app.
 
-Hosting does not bypass access blocks or CAPTCHA. Nekto can reject a datacenter address or automated browser, and site layout changes can require adapter updates. CAPTCHA is completed by the operator. Runtime health is distinct from successfully connecting to live Nekto conversations.
+## Existing session tokens
 
-Source history preserves the previous voice bot; a backup branch also points to its last commit.
+The optional token form accepts two distinct authTokens from your own Nekto sessions. Applying them replaces current sessions, imports supported authToken fields into separate saved browser storage, and starts both searches automatically. Tokens are submitted in authenticated request bodies, cleared from the form, and omitted from logs and status responses. Storage fields are discovered rather than guessed. Session storage persists on the server volume.
 
-## Import two existing text sessions
-After signing into the dashboard, enter your own two distinct authTokens in the session form. Applying them closes current conversations, pauses forwarding, and opens two isolated sessions. Tokens are sent only in the authenticated POST body, never URL parameters or logs, and cleared from the form after submission. The app replaces authToken fields observed in the text site's saved storage before loading its client. It does not guess the voice-chat storage key or alter CAPTCHA controls. If the text client has not created its session storage yet, an initial page load discovers its format. Tokens persist in the existing protected server-side browser storage. Importing a token does not prove the server accepted it and does not guarantee verification is skipped. Start both text chats on Screen, then enable forwarding.
+A token import does not prove the site accepted the token or guarantee that verification is skipped. If Nekto requires CAPTCHA or blocks the hosting address, the panel reports that status. This dashboard cannot complete that verification. Live matching depends on the site's acceptance and availability; passing the application tests does not establish a live stranger connection.

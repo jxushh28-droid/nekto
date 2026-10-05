@@ -4,11 +4,13 @@ import {timingSafeEqual} from 'node:crypto';
 import {chromium} from 'playwright';
 import {Relay,labels} from './relay.js';
 import {withToken,validateTokens} from './session.js';
+import {Transcript} from './transcript.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
 const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
 let configuredTokens=[null,null],tokenSetup=false;
-const tokenStatus=[false,false];
+const tokenStatus=[false,false],transcripts=[new Transcript(),new Transcript()];
+relay.toggle(true);
 const safeError=e=>{let text=String(e?.message||e);for(const token of configuredTokens)if(token)text=text.split(token).join('[redacted]');return text.slice(0,180);};
 const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});
 let browser=null,launching=null;
@@ -26,27 +28,46 @@ async function open(i){
     for(let tries=0;tries<15;tries++){saved=await probe.storageState();imported=withToken(saved,token);if(imported.count)break;await new Promise(r=>setTimeout(r,1000));}
    }finally{await probe.close();}
   }
-  if(!imported.count)throw new Error('Text chat did not expose a supported authToken field. Complete the initial site setup on Screen and try again.');
+  if(!imported.count)throw new Error('Text chat did not expose a supported authToken field. The site has not created a reusable text-session token. Try connecting normally, then reapply the token.');
   saved=imported.state;tokenStatus[i]=true;
  }
  const context=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU',storageState:saved});
  await context.addInitScript({content:injection});const page=await context.newPage();
- const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0};slots[i]=slot;
+ const slot={page,context,busy:false,lastSend:0,opening:true,saveAt:0,status:'loading',detail:''};slots[i]=slot;
  page.on('dialog',dialog=>dialog.dismiss().catch(()=>{}));page.on('popup',p=>p.close().catch(()=>{}));
  page.on('crash',()=>{relay.members[i].error='Browser page crashed. Close and reopen this session.';relay.update(i,{connected:false,epoch:null});});
  try{await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}catch(e){relay.members[i].error=safeError(e);}finally{slot.opening=false;}
 }
+async function connect(i){
+ await open(i);const s=slots[i];
+ for(let attempt=0;attempt<20;attempt++){
+  const state=await s.page.evaluate(()=>window.__textHost?.status());
+  if(state){s.status=state.status;s.detail=state.detail;
+   if(state.connected||state.status==='searching')return;
+   if(['verification','blocked'].includes(state.status))throw new Error(state.detail||'The site requires verification.');
+  }
+  const start=s.page.locator('#searchCompanyBtn');
+  if(await start.isVisible()){
+   const cookies=s.page.locator('#acceptCookies');if(await cookies.isVisible())await cookies.click({timeout:3000});
+   await start.click({timeout:5000});s.status='searching';s.detail='';return;
+  }
+  if(state?.status==='ended'){await s.page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}
+  await new Promise(r=>setTimeout(r,500));
+ }
+ throw new Error('The site did not show its Connect button.');
+}
 async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])return;s.busy=true;
  try{
   if(!new URL(s.page.url()).hostname.match(/(^|\.)nekto-me\.kz$/)){relay.update(i,{connected:false,epoch:null});return;}
-  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);
-  const m=relay.members[i];for(const msg of state.messages)relay.incoming(i,msg.text);
-  while(m.queue.length&&!relay.valid(i,m.queue[0]))m.queue.shift();
+  const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;relay.update(i,state);s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
+  const m=relay.members[i];for(const msg of state.messages){transcripts[i].add('incoming',msg.text);relay.incoming(i,msg.text);}
+  while(m.queue.length&&!relay.valid(i,m.queue[0])){const dropped=m.queue.shift();const row=transcripts[i].items.find(r=>r.id===dropped.transcriptId);if(row)row.delivery='failed';}
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
+   if(item.source!=null){const source=slots[item.source];const current=source?await source.page.evaluate(()=>window.__textHost?.status()):null;if(!current?.connected||current.epoch!==item.sourceEpoch){m.queue.shift();return;}}
    const result=await s.page.evaluate(({text,epoch})=>window.__textHost.send(text,epoch),{text:item.text,epoch:item.targetEpoch});
-   if(result==='submitted'){s.lastSend=Date.now();m.queue.shift();let cleared=false;for(let n=0;n<10;n++){await new Promise(r=>setTimeout(r,100));cleared=await s.page.evaluate(()=>window.__textHost.cleared());if(cleared)break;}if(cleared){m.sent++;m.error='';}else{m.error='Send was not confirmed. Clear the message field to continue.';}}
-   else if(result==='draft'||result==='wait')m.error='Waiting: send or clear the draft in this chat.';
-   else{m.queue.shift();m.error='Delivery stopped: '+result;}
+   if(result==='submitted'){s.lastSend=Date.now();m.queue.shift();let cleared=false;for(let n=0;n<10;n++){await new Promise(r=>setTimeout(r,100));cleared=await s.page.evaluate(()=>window.__textHost.cleared());if(cleared)break;}if(cleared){m.sent++;m.error='';if(item.transcriptId){const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='sent';}else transcripts[i].add('relay',item.text);}else{const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='The site did not confirm sending this message. Reconnect this chat before retrying.';}}
+   else if(result==='draft'||result==='wait')m.error=result==='draft'?'Delivery paused: this session already contains an unsent draft. Reconnect to clear it.':'Waiting for the site to enable sending.';
+   else{m.queue.shift();const row=transcripts[i].items.find(r=>r.id===item.transcriptId);if(row)row.delivery='failed';m.error='Delivery stopped: '+result;}
   }
   if(Date.now()-s.saveAt>60000){s.saveAt=Date.now();await s.context.storageState({path:data+'/slot-'+i+'.json'});}
  }catch(e){relay.members[i].error=safeError(e);relay.update(i,{connected:false,epoch:null});}finally{s.busy=false;}
@@ -69,24 +90,29 @@ const server=http.createServer(async(req,res)=>{try{
   const token=crypto.randomUUID();sessions.add(token);setTimeout(()=>sessions.delete(token),86400000).unref();res.setHeader('Set-Cookie','session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'+(process.env.NODE_ENV==='production'?'; Secure':''));return json(res,200,{ok:true});
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
- if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],opening:!!slots[i]?.opening,tokenImported:tokenStatus[i]}))});
+ if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
   try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s){while(s.busy)await new Promise(r=>setTimeout(r,50));await s.context.close();slots[i]=null;}relay.update(i,{connected:false,epoch:null});tokenStatus[i]=false;}
-   configuredTokens=values;const results=[];for(let i=0;i<2;i++){try{await open(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=safeError(e);configuredTokens[i]=null;tokenStatus[i]=false;results.push({slot:i,ok:false,error});}}
+   configuredTokens=values;relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=safeError(e);configuredTokens[i]=null;tokenStatus[i]=false;results.push({slot:i,ok:false,error});}}
    return json(res,200,{ok:results.every(r=>r.ok),results});
   }finally{locks.fill(null);tokenSetup=false;}
  }
  if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
- const match=url.pathname.match(/^\/api\/slot\/([01])\/(open|close|screen|action)$/);if(!match)return json(res,404,{error:'Not found'});
- const i=Number(match[1]),operation=match[2];if(operation==='screen'&&req.method==='GET'){
-  if(!slots[i])return json(res,409,{error:'Open session first'});const image=await slots[i].page.screenshot({type:'jpeg',quality:65,timeout:10000});res.setHeader('Content-Type','image/jpeg');return res.end(image);}
+ const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send)$/);if(!match)return json(res,404,{error:'Not found'});
+ const i=Number(match[1]),operation=match[2];
  if(req.method!=='POST')return json(res,405,{error:'POST required'});if(tokenSetup||locks[i])return json(res,409,{error:'Session is busy'});
  locks[i]=true;try{
-  if(operation==='open')await open(i);
-  else if(operation==='close'){const s=slots[i];slots[i]=null;relay.update(i,{connected:false,epoch:null});if(s){await s.context.storageState({path:data+'/slot-'+i+'.json'});await s.context.close();}}
-  else{const s=slots[i];if(!s)throw new Error('Open session first');const b=await body(req);if(b.type==='click'){if(!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<0||b.x>420||b.y<0||b.y>760)throw new Error('Invalid coordinates');await s.page.mouse.click(b.x,b.y);}else if(b.type==='type'){await s.page.keyboard.insertText(String(b.text||'').slice(0,4000));}else if(b.type==='key'&&['Enter','Backspace','Tab','Escape'].includes(b.key))await s.page.keyboard.press(b.key);else if(b.type==='scroll')await s.page.mouse.wheel(0,Math.max(-700,Math.min(700,Number(b.delta)||0)));else if(b.type==='reload'){relay.update(i,{connected:false,epoch:null});await s.page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}else throw new Error('Unknown action');}
+  const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));
+  if(operation==='connect'){relay.members[i].error='';if(!relay.enabled)relay.toggle(true);await connect(i);}
+  else if(operation==='close'){slots[i]=null;relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);if(s){await s.context.storageState({path:data+'/slot-'+i+'.json'});await s.context.close();}}
+  else{
+   if(!s)throw new Error('Connect this chat first.');const b=await body(req);
+   if(typeof b.text!=='string'||!b.text.trim()||b.text.length>4000)throw new Error('Write a message of 1–4000 characters.');
+   const current=await s.page.evaluate(()=>window.__textHost?.status());if(!current?.connected||b.epoch!==current.epoch)throw new Error('The conversation changed. Wait for the new chat before sending.');
+   relay.update(i,current);transcripts[i].reset(current.epoch);if(relay.members[i].queue.length>=40)throw new Error('Message queue is full. Wait before sending again.');const item=transcripts[i].add('private',b.text,'queued');relay.enqueue(i,{text:b.text,kind:'private',transcriptId:item.id});
+  }
   return json(res,200,{ok:true});
  }finally{locks[i]=null;}
  }catch(e){json(res,400,{error:safeError(e)});}});

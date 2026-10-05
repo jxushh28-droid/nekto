@@ -1,20 +1,34 @@
 (()=>{
  if(window.__textHost)return;
- let profile=null,connected=false,input=null,route='',generation=0,seen=new WeakSet(),counter=0;
+ let profile=null,connected=false,input=null,route='',generation=0,seen=new WeakMap(),counter=0,initialized=false;
  const doc=crypto.randomUUID();
- const state={epoch:doc+':0',connected:false};
+ const state={epoch:doc+':0',connected:false,status:'loading',detail:''};
+ const visible=NTGAdapter.visible;
  function read(){
   profile=NTGAdapter.detect();const d=NTGAdapter.read(profile);
   if(!!d.connected!==connected||(d.connected&&(input!==d.input||route!==location.hash))){
-   connected=!!d.connected;input=d.input;route=location.hash;state.epoch=doc+':'+(++generation);
-   seen=new WeakSet();for(const m of d.messages)seen.add(m.el);
+   connected=!!d.connected;input=d.input;route=location.hash;state.epoch=doc+':'+(++generation);seen=new WeakMap();
+   // Only seed history when attaching to an already-running document. The first
+   // incoming message in a newly connected conversation must not be discarded.
+   if(!initialized&&connected)for(const m of d.messages)seen.set(m.el,m.text);
   }
-  state.connected=connected;return d;
+  initialized=true;state.connected=connected;
+  const blocking=['#mask_bad','#mask_bad_inet','#mask_cap','#mask_hcap','.swal2-popup'].map(s=>document.querySelector(s)).find(visible);
+  const searching=visible(document.querySelector('#search_company_loading'))||/\/searching(?:[/?]|$)/.test(location.hash);
+  const start=visible(document.querySelector('#searchCompanyBtn'));
+  state.status=blocking?(/cap/.test(blocking.id)?'verification':'blocked'):connected?'connected':searching?'searching':start?'ready':visible(document.querySelector('.status-end'))?'ended':'loading';
+  state.detail=blocking?(blocking.innerText||blocking.textContent||'').trim().slice(0,260):'';
+  return d;
  }
  window.__textHost={
-  poll(){const d=read(),messages=[];for(const m of d.messages){if(seen.has(m.el))continue;seen.add(m.el);if(connected)messages.push({id:doc+':'+(++counter),text:m.text});}return {...state,messages};},
-  send(text,epoch){const d=read();if(!connected||state.epoch!==epoch)return 'changed';if(NTGAdapter.value(d.input)?.trim())return 'draft';if(d.send.disabled)return 'wait';if(text.length>(d.input.maxLength>0?d.input.maxLength:4000))return 'too long';NTGAdapter.setValue(d.input,text);d.send.click();return 'submitted';},
-  cleared(){const d=read();return !d.input||!NTGAdapter.value(d.input)?.trim();},
+  poll(){const d=read(),messages=[];for(const m of d.messages){if(seen.get(m.el)===m.text)continue;seen.set(m.el,m.text);if(connected)messages.push({id:doc+':'+(++counter),text:m.text});}return {...state,messages};},
+  async send(text,epoch){
+   const d=read();if(!connected||state.epoch!==epoch)return 'changed';if(NTGAdapter.value(d.input)?.trim())return 'draft';if(text.length>(d.input.maxLength>0?d.input.maxLength:4000))return 'too long';
+   NTGAdapter.setValue(d.input,text);d.input.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Unidentified'}));
+   for(let n=0;n<10;n++){await new Promise(r=>setTimeout(r,n===0?80:50));const now=read();if(!connected||state.epoch!==epoch||now.input!==d.input)return 'changed';if(!now.send.disabled){now.send.click();return 'submitted';}}
+   if(NTGAdapter.value(d.input)===text)NTGAdapter.setValue(d.input,'');return 'wait';
+  },
+  cleared(){const d=read();return !!d.input&&!NTGAdapter.value(d.input)?.trim();},
   status(){read();return {...state};}
  };
 })();
