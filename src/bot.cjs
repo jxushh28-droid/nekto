@@ -1,8 +1,0 @@
-'use strict';
-require('dotenv').config({quiet:true});
-const {config}=require('./config.cjs'),{Mixer}=require('./audio.cjs'),{BrowserLink}=require('./browser-link.cjs'),{DiscordBridge}=require('./discord-bridge.cjs');
-let bot,browser,health,stopping=false;
-if(process.env.PORT){health=require('node:http').createServer((req,res)=>{if(req.url!=='/health'){res.writeHead(404);res.end();return;}const ready=!!bot?.client?.isReady();res.writeHead(ready?200:503,{'Content-Type':'application/json'});res.end(JSON.stringify({status:ready?'ok':'starting'}));});health.listen(Number(process.env.PORT),'0.0.0.0');}
-async function stop(){if(stopping)return;stopping=true;await bot?.stop().catch(()=>{});await browser?.stop().catch(()=>{});health?.close();process.exit(0);}
-(async()=>{const cfg=config(process.env);const mixer=new Mixer();browser=new BrowserLink(mixer,cfg);browser.on('fault',message=>console.error(message));await browser.start();bot=new DiscordBridge(cfg,mixer,browser);await bot.start();if(process.env.NEKTO_PRELOAD==='true'){for(let i=0;i<cfg.nektoTokens.length;i++)if(cfg.nektoTokens[i]){try{const report=await browser.probe(i);console.log('Nekto readiness: '+JSON.stringify(report));}catch(error){console.error('Nekto readiness failed: '+browser.clean(error.message));}}}})().catch(async error=>{let message=String(error.message);for(const name of ['DISCORD_TOKEN','NEKTO_AUTH_TOKEN_1','NEKTO_AUTH_TOKEN_2'])if(process.env[name])message=message.split(process.env[name]).join('[redacted]');console.error('Startup failed: '+message);await bot?.stop().catch(()=>{});await browser?.stop().catch(()=>{});health?.close();process.exitCode=1;});
-process.on('SIGINT',stop);process.on('SIGTERM',stop);

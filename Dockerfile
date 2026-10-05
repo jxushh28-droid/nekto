@@ -1,12 +1,7 @@
-FROM node:24-bookworm-slim
-ENV NODE_ENV=production CHROMIUM_EXECUTABLE=/usr/bin/chromium NEKTO_DATA_DIR=/data
-RUN apt-get update && apt-get install -y --no-install-recommends chromium ca-certificates fonts-liberation tini && rm -rf /var/lib/apt/lists/*
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --no-audit --no-fund
-COPY src ./src
-COPY browser ./browser
-COPY assets ./assets
-RUN mkdir -p /data
-ENTRYPOINT ["tini", "--"]
-CMD ["node", "src/bot.cjs"]
+COPY package*.json ./
+RUN npm install --omit=dev
+COPY . .
+ENV NODE_ENV=production
+CMD ["node", "server.js"]
