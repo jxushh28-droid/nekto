@@ -124,11 +124,3 @@ const server=http.createServer(async(req,res)=>{try{
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
 async function shutdown(){relay.toggle(false);await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
-
-async function diagnoseVideoImport(){
- const probe=new VideoHost({getBrowser:getVideoBrowser,data});
- try{await probe.sessionsLoaded;if(!probe.sessions.some(Boolean))return;
- for(let i=0;i<2;i++){if(!probe.sessions[i])continue;try{await probe.prepareSession(i);console.log(JSON.stringify({event:'video_import_probe',slot:i===0?'A':'B',ok:true}));}catch{console.log(JSON.stringify({event:'video_import_probe',slot:i===0?'A':'B',ok:false}));}finally{await probe.close(i);}}
- }finally{await probe.shutdown();}
-}
-void diagnoseVideoImport().catch(()=>console.warn(JSON.stringify({event:'video_import_probe',ok:false,reason:'probe-unavailable'})));
