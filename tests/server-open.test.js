@@ -9,7 +9,7 @@ function fixture(tokens){
  const slots=[null,null],states=[],visits=[],tokenStatus=[false,false];
  const page={on(){},async goto(url){visits.push(url);}};
  const context={async addInitScript(){},async newPage(){return page;},async storageState(){},async close(){}};
- const sandbox={slots,configuredTokens:tokens,tokenStatus,withToken,data:'/fixture',injection:'',site:ORIGIN+'/chat/',readFile:async()=>{throw Object.assign(new Error('not found'),{code:'ENOENT'});},getBrowser:async()=>({async newContext(options){states.push(options.storageState);return context;}}),operationError(){}};
+ const sandbox={audio:{hasOpen:()=>false},slots,configuredTokens:tokens,tokenStatus,withToken,data:'/fixture',injection:'',site:ORIGIN+'/chat/',readFile:async()=>{throw Object.assign(new Error('not found'),{code:'ENOENT'});},getBrowser:async()=>({async newContext(options){states.push(options.storageState);return context;}}),operationError(){}};
  vm.createContext(sandbox);vm.runInContext(openSource+';globalThis.openSlot=open;',sandbox);
  return {slots,states,visits,open:sandbox.openSlot};
 }

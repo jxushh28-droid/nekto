@@ -9,6 +9,7 @@ import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
 import {loadTokens,saveTokens} from './token-config.js';
 import {VideoHost} from './video-host.js';
+import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
 const password=process.env.DASHBOARD_PASSWORD;
@@ -22,11 +23,12 @@ const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recurs
 let browser=null,launching=null,videoBrowser=null,videoLaunching=null;
 async function getVideoBrowser(){if(videoBrowser?.isConnected())return videoBrowser;if(!videoLaunching)videoLaunching=chromium.launch({headless:true,args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream','--js-flags=--max-old-space-size=128']}).then(b=>{videoBrowser=b;return b;}).finally(()=>videoLaunching=null);return videoLaunching;}
 const video=new VideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
+const audio=new AudioHost({data});
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/chat/';
 async function getBrowser(){if(browser?.isConnected())return browser;if(!launching)launching=chromium.launch({headless:true,args:['--disable-dev-shm-usage']}).then(b=>{browser=b;return b;}).finally(()=>launching=null);return launching;}
 async function open(i){
- if(slots[i])return;const b=await getBrowser();let saved;try{saved=JSON.parse(await readFile(data+'/slot-'+i+'.json','utf8'));}catch{}
+ if(audio.hasOpen())throw Error('Close audio sessions before opening text sessions.');if(slots[i])return;const b=await getBrowser();let saved;try{saved=JSON.parse(await readFile(data+'/slot-'+i+'.json','utf8'));}catch{}
  const token=configuredTokens[i];
  if(token){const imported=withToken(saved,token);saved=imported.state;tokenStatus[i]=false;}
  const context=await b.newContext({viewport:{width:420,height:760},locale:'ru-RU',storageState:saved});
@@ -75,9 +77,9 @@ const failures=new Map();
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
  if(url.pathname==='/health')return json(res,200,{ok:true,service:'nekto-text-host'});
- if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture'].includes(url.pathname)){
+ if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css'].includes(url.pathname)){
   if(url.pathname==='/video-fixture'){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><body>Generated media test</body>');}
-  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
+  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
  if(req.method==='POST'){
   const origin=req.headers.origin;if(origin&&origin!== 'https://'+req.headers.host&&origin!=='http://'+req.headers.host)return json(res,403,{error:'Invalid origin'});
  }
@@ -87,6 +89,20 @@ const server=http.createServer(async(req,res)=>{try{
   const token=crypto.randomUUID();sessions.add(token);setTimeout(()=>sessions.delete(token),86400000).unref();res.setHeader('Set-Cookie','session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'+(process.env.NODE_ENV==='production'?'; Secure':''));return json(res,200,{ok:true});
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
+ if(url.pathname==='/api/audio/status'&&req.method==='GET'){await audio.loaded;return json(res,200,audio.status());}
+ if(url.pathname==='/api/audio/tokens'&&req.method==='GET'){await audio.loaded;return json(res,200,{tokens:audio.tokens});}
+ if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
+  if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
+  const b=await body(req);try{
+   if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
+   if(url.pathname==='/api/audio/connect'){await audio.consent(b.consent);return json(res,200,await audio.connectBoth());}
+   if(url.pathname==='/api/audio/consent'){await audio.consent(b.consent);return json(res,200,{ok:true});}
+   const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|close)$/);if(m){const i=Number(m[1]);if(m[2]==='start')await audio.start(i);else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}
+   return json(res,404,{error:'Unknown audio operation'});
+  }catch(e){return json(res,400,{error:audio.error(e)});}
+ }
+ const audioStream=url.pathname.match(/^\/api\/audio\/([01])\/stream$/);if(audioStream&&req.method==='GET'){const i=Number(audioStream[1]);if(!audio.slots[i])return json(res,409,{error:'Connect this audio side first.'});return audio.subscribe(i,res);}
+ if(audio.hasOpen()&&url.pathname.startsWith('/api/video/')&&req.method==='POST'&&!/\/(close|toggle)$/.test(url.pathname))return json(res,409,{error:'Close audio sessions before starting video.'});
  if(url.pathname==='/api/video/status'&&req.method==='GET')return json(res,200,video.status());
  if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{sessions:video.sessions});}
  if(url.pathname==='/api/video/diagnostics'&&req.method==='GET')return json(res,200,await video.inspect());
@@ -98,6 +114,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i);else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){const allowed=/^(OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV client|Could not apply|OmeTV requires|Sign in to|The video bridge|Connect this participant|Write a message|OmeTV did not|Open this video|Invalid browser|Could not open)/.test(e.message);return json(res,400,{error:allowed?e.message:'Hosted video operation failed. Check your OmeTV session and try again.'});}finally{videoOps.delete(i);}}
  if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],verification:slots[i]?.verification||null,status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
+  if(audio.hasOpen())return json(res,409,{error:'Close audio sessions before changing text tokens.'});
   if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
   const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
   try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);tokenStatus[i]=false;if(s)s.preparedToken=null;}
@@ -125,5 +142,5 @@ const server=http.createServer(async(req,res)=>{try{
  }catch(e){if(operation!=='connect')operationError(i,e);throw e;}finally{locks[i]=null;}
  }catch(e){json(res,400,{error:safeError(e)});}});
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
-async function shutdown(){relay.toggle(false);await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
+async function shutdown(){relay.toggle(false);await audio.shutdown();await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
