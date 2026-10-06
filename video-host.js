@@ -27,9 +27,56 @@ export class VideoHost{
  async tick(){if(this.polling||this.closed)return;this.polling=true;try{for(let i=0;i<2;i++){const slot=this.slots[i];if(!slot||slot.busy)continue;const frame=this.frame(slot);if(!frame){slot.status='login';continue;}const state=await frame.evaluate(()=>window.__videoHost?.status()).catch(()=>null);if(!state){slot.status='loading';continue;}const wasConnected=slot.connected;slot.connected=state.connected;slot.status=state.verification?'verification':state.login?'login':state.connected?'connected':slot.searchRequested?'searching':'ready';slot.mediaReady=state.mediaReady;slot.receiverFailed=state.receiverFailed;
  if(state.ended&&!state.connected){await this.close(i);continue;}if(wasConnected&&!slot.connected){slot.cache=[];slot.cacheBytes=0;await this.frame(this.slots[1-i])?.evaluate(()=>window.__videoHost?.clearIncoming()).catch(()=>{});}await frame.evaluate(value=>window.__videoHost?.routing(value),{enabled:this.enabled,otherConnected:!!this.slots[1-i]?.connected});if(slot.remember&&Date.now()-slot.savedAt>60000){slot.savedAt=Date.now();await slot.context.storageState({path:this.data+'/video-'+i+'.json'});}}
  }catch{}finally{this.polling=false;}}
- async prepareSession(i){await this.sessionsLoaded;const session=this.sessions[i];if(!session)throw new Error('Paste this side’s complete OmeTV snid session first.');await this.open(i);const slot=this.slots[i];if(slot.preparedToken===session.token)return;slot.busy=true;let stage='wait-client';try{let frame;for(let n=0;n<60;n++){frame=this.frame(slot);if(frame&&await frame.evaluate(()=>!!window.__videoHost).catch(()=>false))break;await new Promise(r=>setTimeout(r,250));}if(!frame)throw new Error('OmeTV client did not load.');stage='wait-document';await frame.waitForLoadState?.('domcontentloaded');stage='read-initial-state';const initial=await frame.evaluate(()=>window.__videoHost?.status());if(initial?.verification)throw new Error('OmeTV requires verification.');for(let pass=0;pass<2;pass++){stage='apply-'+(pass+1);await slot.page.evaluate(session=>{localStorage.setItem('snid',JSON.stringify(session));const iframe=document.getElementById('videochat');if(!iframe?.contentWindow)throw Error('OmeTV frame missing');iframe.contentWindow.postMessage({setAuthToken:session.token,videochatDataStr:session.SnDataStr,videochatHmac:session.SnHmac,source:'sn'},'https://ometv.chat');},session);stage='settle-'+(pass+1);await new Promise(r=>setTimeout(r,800));const state=await frame.evaluate(()=>window.__videoHost?.status());if(state?.verification)throw new Error('OmeTV requires verification.');}stage='confirm-client';let state;for(let n=0;n<20;n++){state=await frame.evaluate(()=>window.__videoHost?.status());if(state?.verification)throw new Error('OmeTV requires verification.');if(state?.mediaReady&&!state.login)break;await new Promise(r=>setTimeout(r,250));}if(!state?.mediaReady||state.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');slot.preparedToken=session.token;slot.status='ready';}catch(e){slot.preparedToken=null;const failure=videoFailure(e,stage,this.sessions);console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));slot.error='OmeTV session failed at '+failure.stage+': '+failure.reason;throw new Error(/^(OmeTV requires|OmeTV did not accept|OmeTV client)/.test(e.message)?e.message:slot.error);}finally{slot.busy=false;}}
+
+ async currentClient(slot,timeout=15000){
+  const deadline=Date.now()+timeout;
+  while(Date.now()<deadline){
+   if(slot.page.isClosed?.())throw new Error('OmeTV client closed.');
+   const frame=this.frame(slot);
+   if(frame&&!frame.isDetached?.()){
+    try{const state=await frame.evaluate(()=>window.__videoHost?.status());if(state?.mediaReady)return {frame,state};}
+    catch(e){if(!/detached|context.*destroyed|cannot find context|context.*not found/i.test(e.message))throw e;}
+   }
+   await new Promise(r=>setTimeout(r,100));
+  }
+  throw new Error('OmeTV client did not load.');
+ }
+ async prepareSession(i){
+  await this.sessionsLoaded;const session=this.sessions[i];
+  if(!session)throw new Error('Paste this side’s complete OmeTV snid session first.');
+  await this.open(i);const slot=this.slots[i];if(slot.preparedToken===session.token)return;
+  slot.busy=true;let stage='wait-client';
+  try{
+   const initial=await this.currentClient(slot);if(initial.state.verification)throw new Error('OmeTV requires verification.');
+   for(let pass=0;pass<2;pass++){
+    stage='wait-apply-'+(pass+1);const current=await this.currentClient(slot);
+    if(current.state.verification)throw new Error('OmeTV requires verification.');
+    stage='apply-'+(pass+1);
+    await slot.page.evaluate(session=>{
+     localStorage.setItem('snid',JSON.stringify(session));
+     const iframe=document.getElementById('videochat');
+     if(!iframe?.contentWindow)throw Error('OmeTV frame missing');
+     iframe.contentWindow.postMessage({setAuthToken:session.token,videochatDataStr:session.SnDataStr,videochatHmac:session.SnHmac,source:'sn'},'https://ometv.chat');
+    },session);
+    stage='settle-'+(pass+1);await new Promise(r=>setTimeout(r,800));
+    const settled=await this.currentClient(slot);if(settled.state.verification)throw new Error('OmeTV requires verification.');
+   }
+   stage='confirm-client';let state;
+   for(let n=0;n<20;n++){
+    ({state}=await this.currentClient(slot));if(state.verification)throw new Error('OmeTV requires verification.');
+    if(!state.login)break;await new Promise(r=>setTimeout(r,250));
+   }
+   if(state.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');
+   slot.preparedToken=session.token;slot.status='ready';slot.error='';
+  }catch(e){
+   slot.preparedToken=null;const failure=videoFailure(e,stage,this.sessions);
+   console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));
+   slot.error='OmeTV session failed at '+failure.stage+': '+failure.reason;
+   throw new Error(/^(OmeTV requires|OmeTV did not accept|OmeTV client)/.test(e.message)?e.message:slot.error);
+  }finally{slot.busy=false;}
+ }
  async applySessions(values){const sessions=validateVideoSessions(values);if(this.sessionSetup)throw new Error('Video session setup is busy.');this.sessionSetup=true;try{await this.sessionsLoaded;await this.close(0);await this.close(1);await saveVideoSessions(this.data,sessions);this.sessions=sessions;const results=[];for(let i=0;i<2;i++){try{await this.start(i);results.push({slot:i,ok:true});}catch(e){const error=/^(OmeTV session failed|Paste this side|OmeTV requires|OmeTV did not accept|OmeTV client|Could not apply|Could not open|The video bridge)/.test(e.message)?e.message:'Hosted video connection failed.';if(this.slots[i])this.slots[i].error=error;results.push({slot:i,ok:false,error});}}return {ok:results.every(r=>r.ok),results};}finally{this.sessionSetup=false;}}
- async start(i){await this.prepareSession(i);const slot=this.slots[i];slot.busy=true;try{const frame=this.frame(slot);if(!frame)throw new Error('OmeTV client did not load.');const state=await frame.evaluate(()=>window.__videoHost?.status());if(state?.verification)throw new Error('OmeTV requires verification.');if(state?.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');if(state?.connected)return;if(!state?.mediaReady)throw new Error('The video bridge is not ready.');await frame.getByText('Start',{exact:true}).click({timeout:5000});slot.searchRequested=true;slot.status='searching';slot.error='';}catch(e){const failure=videoFailure(e,'start',this.sessions);console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));if(/^(OmeTV requires|OmeTV did not accept|OmeTV client|The video bridge)/.test(e.message))throw e;slot.error='OmeTV session failed at start: '+failure.reason;throw new Error(slot.error);}finally{slot.busy=false;}}
+ async start(i){await this.prepareSession(i);const slot=this.slots[i];slot.busy=true;try{const {state}=await this.currentClient(slot);if(state?.verification)throw new Error('OmeTV requires verification.');if(state?.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');if(state?.connected)return;if(!state?.mediaReady)throw new Error('The video bridge is not ready.');await slot.page.frameLocator('iframe#videochat').getByText('Start',{exact:true}).click({timeout:5000});slot.searchRequested=true;slot.status='searching';slot.error='';}catch(e){const failure=videoFailure(e,'start',this.sessions);console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));if(/^(OmeTV requires|OmeTV did not accept|OmeTV client|The video bridge)/.test(e.message))throw e;slot.error='OmeTV session failed at start: '+failure.reason;throw new Error(slot.error);}finally{slot.busy=false;}}
  async toggle(enabled,consent){if(enabled&&!consent)throw new Error('Confirm that both connected participants know about the bridge.');if(enabled&&!this.slots.every(s=>s?.connected))throw new Error('Connect both participants first.');this.enabled=!!enabled;for(let i=0;i<2;i++){const slot=this.slots[i];if(!slot)continue;const frame=this.frame(slot);await frame?.evaluate(()=>window.__videoHost?.clearIncoming());await frame?.evaluate(value=>window.__videoHost?.routing(value),{enabled:this.enabled,otherConnected:!!this.slots[1-i]?.connected});if(enabled)await frame?.evaluate(()=>window.__videoHost?.restart());}}
  async close(i){const slot=this.slots[i];if(!slot)return;this.slots[i]=null;this.enabled=false;const other=this.slots[1-i];await this.frame(other)?.evaluate(()=>{window.__videoHost?.routing({enabled:false,otherConnected:false});window.__videoHost?.clearIncoming();}).catch(()=>{});for(const res of this.clients[i]){res.write('event: closed\ndata: {}\n\n');res.end();}this.clients[i].clear();if(slot.remember)await slot.context.storageState({path:this.data+'/video-'+i+'.json'}).catch(()=>{});await slot.context.close().catch(()=>{});}
  status(){return {enabled:this.enabled,sessionSetup:this.sessionSetup,sessionConfigured:this.sessions.map(Boolean),slots:this.slots.map((s,i)=>({label:i===0?'A':'B',open:!!s,status:s?.status||'closed',connected:!!s?.connected,busy:!!s?.busy,error:s?.error||'',remember:!!s?.remember,receiverFailed:!!s?.receiverFailed}))};}

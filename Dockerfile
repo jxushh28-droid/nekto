@@ -3,6 +3,6 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY . .
-RUN node --check server.js && node --check video-host.js && node --test tests/video-host.test.js tests/video-session-config.test.js
+RUN node --check server.js && node --check video-host.js && node --test tests/video-host.test.js tests/video-session-config.test.js tests/video-frame-browser.test.js
 ENV NODE_ENV=production
 CMD ["node", "server.js"]
