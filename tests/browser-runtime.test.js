@@ -22,7 +22,7 @@ function nativeFixture(){
  const f=fixture(),listeners=new Set(),sent=[];
  const store={state:{system:{isAuth:true,socketConnected:true,captchaRequired:false,hcaptchaRequired:false},user:{tokenModel:{id:7}},chat:{anonDialog:null}},subscribe(fn){listeners.add(fn);return()=>listeners.delete(fn);}};
  const notify=()=>{for(const fn of [...listeners])fn({type:'chat/addMessage'});};
- f.document.body.__vue__={$store:store,$socketActions:{anonMessage(id,message,randomId){sent.push({id,message});queueMicrotask(()=>{store.state.chat.anonDialog.messages.push({id:100,randomId,senderId:7,message});notify();});}}};
+ f.document.body.__vue__={$store:store,$socketActions:{anonMessage(id,message,randomId){sent.push({id,message});queueMicrotask(()=>{store.state.chat.anonDialog.messages.push({id:100,randomId:String(randomId),senderId:7,message});notify();});}}};
  return {...f,store,nativeSent:sent,dialog(id,messages=[]){store.state.chat.anonDialog={id,messages,close:null};notify();},message(m){store.state.chat.anonDialog.messages.push(m);notify();}};
 }
 test('Vue conversation works without a DOM composer and preserves exact messages',async()=>{

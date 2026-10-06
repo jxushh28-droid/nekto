@@ -25,7 +25,7 @@
   async send(text,epoch){
    const d=read();if(!connected||state.epoch!==epoch)return 'changed';if(d.native){
     if(text.length>4000)return 'too long';if(typeof d.actions?.anonMessage!=='function')return 'unavailable';
-    const randomId=Date.now()*1000+Math.floor(Math.random()*1000),id=d.dialog.id;
+    const randomId=String(Date.now()*1000+Math.floor(Math.random()*1000)),id=d.dialog.id;
     return new Promise(resolve=>{
      let done=false,unsub=()=>{},timer;
      const finish=result=>{if(done)return;done=true;clearTimeout(timer);unsub();resolve(result);};
