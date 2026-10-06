@@ -49,18 +49,19 @@ export class VideoHost{
   slot.busy=true;let stage='wait-client';
   try{
    const initial=await this.currentClient(slot);if(initial.state.verification)throw new Error('OmeTV requires verification.');
-   for(let pass=0;pass<2;pass++){
-    stage='wait-apply-'+(pass+1);const current=await this.currentClient(slot);
+   {
+    stage='wait-authorize';const current=await this.currentClient(slot);
     if(current.state.verification)throw new Error('OmeTV requires verification.');
-    stage='apply-'+(pass+1);
+    stage='authorize';
     await slot.page.evaluate(session=>{
+     localStorage.setItem('snid',JSON.stringify(session));
      localStorage.setItem('snid',JSON.stringify(session));
      const iframe=document.getElementById('videochat');
      const client=location.pathname==='/embed/index.html'?window:iframe?.contentWindow;
      if(!client)throw Error('OmeTV frame missing');
-     client.postMessage({setAuthToken:session.token,videochatDataStr:session.SnDataStr,videochatHmac:session.SnHmac,source:'sn'},'https://ometv.chat');
+     client.postMessage({setAuthToken:session.token,videochatDataStr:session.SnDataStr,videochatHmac:session.SnHmac,source:'sn',...(session.auxId?{auxId:session.auxId}:{})},'https://ometv.chat');
     },session);
-    stage='settle-'+(pass+1);await new Promise(r=>setTimeout(r,800));
+    stage='settle';await new Promise(r=>setTimeout(r,800));
     const settled=await this.currentClient(slot);if(settled.state.verification)throw new Error('OmeTV requires verification.');
    }
    stage='confirm-client';let state;
@@ -69,6 +70,7 @@ export class VideoHost{
     if(!state.login)break;await new Promise(r=>setTimeout(r,250));
    }
    if(state.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');
+   if(state.nativeError)throw new Error(state.nativeError);
    slot.preparedToken=session.token;slot.status='ready';slot.error='';
   }catch(e){
    slot.preparedToken=null;const failure=videoFailure(e,stage,this.sessions);
@@ -78,7 +80,7 @@ export class VideoHost{
   }finally{slot.busy=false;}
  }
  async applySessions(values){const sessions=validateVideoSessions(values);if(this.sessionSetup)throw new Error('Video session setup is busy.');this.sessionSetup=true;try{await this.sessionsLoaded;await this.close(0);await this.close(1);await saveVideoSessions(this.data,sessions);this.sessions=sessions;const results=[];for(let i=0;i<2;i++){try{await this.start(i);results.push({slot:i,ok:true});}catch(e){const error=/^(OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV requires|OmeTV did not accept|OmeTV client|Could not apply|Could not open|The video bridge)/.test(e.message)?e.message:'Hosted video connection failed.';if(this.slots[i])this.slots[i].error=error;results.push({slot:i,ok:false,error});}}return {ok:results.every(r=>r.ok),results};}finally{this.sessionSetup=false;}}
- async validateSessions(){this.sessionSetup=true;try{const results=[];for(let i=0;i<2;i++){try{await this.prepareSession(i);const {state}=await this.currentClient(this.slots[i]);if(state.nativeError)throw new Error(state.nativeError);results.push({slot:i,ok:true});}catch(e){results.push({slot:i,ok:false,error:/^(OmeTV|Paste this side|Could not open)/.test(e.message)?e.message:'Could not validate the hosted session.'});}}for(let i=0;i<2;i++)if(results[i].ok){try{await this.currentClient(this.slots[i]);}catch(e){results[i]={slot:i,ok:false,error:/^OmeTV/.test(e.message)?e.message:'Could not validate the hosted session.'};}}return {ok:results.every(r=>r.ok),results};}finally{this.sessionSetup=false;}}
+ async validateSessions(){this.sessionSetup=true;try{const results=[];for(let i=0;i<2;i++){try{await this.prepareSession(i);const {state}=await this.currentClient(this.slots[i]);if(state.nativeError)throw new Error(state.nativeError);results.push({slot:i,ok:true});}catch(e){results.push({slot:i,ok:false,error:/^(OmeTV|Paste this side|Could not open)/.test(e.message)?e.message:'Could not validate the hosted session.'});}}for(let i=0;i<2;i++)if(results[i].ok){try{const {state}=await this.currentClient(this.slots[i]);if(state.nativeError)throw new Error(state.nativeError);}catch(e){results[i]={slot:i,ok:false,error:/^OmeTV/.test(e.message)?e.message:'Could not validate the hosted session.'};}}return {ok:results.every(r=>r.ok),results};}finally{this.sessionSetup=false;}}
  startControl(slot){const client=slot.page.url?.().includes('/embed/index.html')?slot.page:slot.page.frameLocator('iframe#videochat');return client.locator('.btn.btn-main:has([data-tr="start"])');}
  async start(i){if(this.slots[i]?.crashed)await this.close(i);await this.prepareSession(i);const slot=this.slots[i];slot.busy=true;try{const {state}=await this.currentClient(slot);if(state?.verification)throw new Error('OmeTV requires verification.');if(state?.login)throw new Error('OmeTV did not accept this session. Copy a fresh complete snid value.');if(state?.connected)return;if(state?.nativeError)throw new Error(state.nativeError);if(slot.searchRequested&&Date.now()-slot.searchAt>15000){await this.close(i);return this.start(i);}if(!state?.mediaReady)throw new Error('The video bridge is not ready.');await this.startControl(slot).click({timeout:5000});slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';}catch(e){const failure=videoFailure(e,'start',this.sessions);console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));if(/^(OmeTV requires|OmeTV did not accept|OmeTV client|OmeTV has restricted|OmeTV could not|The video bridge)/.test(e.message)){slot.error=e.message;throw e;}slot.error='OmeTV session failed at start: '+failure.reason;throw new Error(slot.error);}finally{slot.busy=false;}}
  async toggle(enabled,consent){if(enabled&&!consent)throw new Error('Confirm that both connected participants know about the bridge.');if(enabled&&!this.slots.every(s=>s?.connected))throw new Error('Connect both participants first.');this.enabled=!!enabled;for(let i=0;i<2;i++){const slot=this.slots[i];if(!slot)continue;const frame=this.frame(slot);await frame?.evaluate(()=>window.__videoHost?.clearIncoming());await frame?.evaluate(value=>window.__videoHost?.routing(value),{enabled:this.enabled,otherConnected:!!this.slots[1-i]?.connected});if(enabled)await frame?.evaluate(()=>window.__videoHost?.restart());}}

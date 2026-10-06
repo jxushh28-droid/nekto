@@ -15,3 +15,4 @@ test('OmeTV session profiles persist privately and restore without changing sign
  const data=await mkdtemp(join(tmpdir(),'video-session-'));
  try{const sessions=['a','b'].map(token=>({token,SnDataStr:' {"fixture":true} ',SnHmac:'test-signature'}));await saveVideoSessions(data,sessions);assert.deepEqual(await loadVideoSessions(data),sessions);assert.equal((await stat(data+'/video-sessions.json')).mode&0o777,0o600);assert.deepEqual(JSON.parse(await readFile(data+'/video-sessions.json','utf8')),sessions);}finally{await rm(data,{recursive:true,force:true});}
 });
+test('optional OmeTV account IDs are preserved and duplicate account imports are rejected',()=>{const a={token:'a',SnDataStr:'data-a',SnHmac:'sig-a',auxId:101},b={token:'b',SnDataStr:'data-b',SnHmac:'sig-b',auxId:202};assert.deepEqual(parseVideoSession(JSON.stringify(a)),a);assert.deepEqual(validateVideoSessions([a,b]),[a,b]);assert.throws(()=>validateVideoSessions([a,{...b,auxId:101}]),/same auxId/);});

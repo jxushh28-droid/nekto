@@ -33,7 +33,7 @@ test('real Chromium follows replaced iframe and clicks the native container when
   await host.start(0);
   await host.slots[0].page.waitForFunction(()=>window.fixtureStarted===1,{},{timeout:5000});
   const result=await host.slots[0].page.evaluate(()=>({applications:window.fixtureApplies,starts:window.fixtureStarted}));
-  assert.deepEqual(result,{applications:2,starts:1});
+  assert.deepEqual(result,{applications:1,starts:1});
  }finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
 });
 test('runtime detects ICE connections with streamless incoming tracks',async()=>{
@@ -88,10 +88,11 @@ test('site guidance and inactive notices cannot block Start; active errors remai
   assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not connect to its server.');
  }finally{await context.close();await browser.close();}
 });
-test('direct native chat applies twice and starts without an account homepage',async()=>{
+test('direct native chat authorizes once and starts without an account homepage',async()=>{
  const {mkdtemp,rm}=await import('node:fs/promises'),data=await mkdtemp(join(tmpdir(),'video-direct-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const urls=[],host=new VideoHost({data,getBrowser:async()=>({newContext:async options=>{
   const context=await browser.newContext(options);await context.route('https://ometv.chat/**',async route=>{urls.push(new URL(route.request().url()).pathname);await route.fulfill({contentType:'text/html',body:`<video id="local-video"></video><input id="chat-text"><div class="btn btn-main"><span data-tr="start">Start</span></div><script>window.applies=0;window.starts=0;window.__videoHost={status:()=>({mediaReady:true,login:false,verification:false,connected:false})};window.addEventListener('message',e=>{if(e.origin==='https://ometv.chat'&&e.source===window&&e.data.source==='sn'&&e.data.setAuthToken==='direct-token')window.applies++;});document.querySelector('.btn').onclick=()=>window.starts++;</script>`});});return context;
  }})});
- try{await host.sessionsLoaded;host.sessions[0]={token:'direct-token',SnDataStr:'signed-data',SnHmac:'signed-hmac'};await host.start(0);assert.deepEqual(await host.slots[0].page.evaluate(()=>({applies:window.applies,starts:window.starts})),{applies:2,starts:1});assert.equal(urls.includes('/'),false);assert.equal(urls.includes('/embed/index.html'),true);}finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
+ try{await host.sessionsLoaded;host.sessions[0]={token:'direct-token',SnDataStr:'signed-data',SnHmac:'signed-hmac'};await host.start(0);assert.deepEqual(await host.slots[0].page.evaluate(()=>({applies:window.applies,starts:window.starts})),{applies:1,starts:1});assert.equal(urls.includes('/'),false);assert.equal(urls.includes('/embed/index.html'),true);}finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
 });
+test('native duplicate-window notice outside translation labels is detected',async()=>{const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox']});const context=await browser.newContext();try{await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});await context.route('https://ometv.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="local-video"></video><input id="chat-text"><div>You have opened the application in another window or in another browser. Reload the page or click "Restart" button.</div>'}));const page=await context.newPage();await page.goto('https://ometv.chat/embed/index.html');assert.match(await page.evaluate(()=>window.__videoHost.status().nativeError),/separate active session/);}finally{await context.close();await browser.close();}});

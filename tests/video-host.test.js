@@ -5,11 +5,11 @@ test('media forwards only with enabled routing, and old-generation segments are 
 test('private video text uses only the selected side',async()=>{const f=fixture();try{await f.host.send(0,'original message');assert.ok(f.calls[0].some(c=>c.text==='original message'));assert.equal(f.calls[1].length,0);}finally{await f.host.shutdown();}});
 test('closing one video session disables forwarding and clears the other incoming stream',async()=>{const f=fixture();f.host.enabled=true;await f.host.close(0);assert.equal(f.host.slots[0],null);assert.ok(f.host.slots[1]);assert.equal(f.host.enabled,false);assert.ok(f.calls[1].some(c=>c.fn?.includes('clearIncoming')));await f.host.shutdown();});
 test('stream subscriptions replay initial headers and clean up on disconnect',async()=>{const f=fixture(),res=new EventEmitter(),writes=[];res.writeHead=()=>{};res.write=text=>{writes.push(text);return true;};res.end=()=>res.emit('close');try{f.host.slots[0].cache=[{generation:'one',data:'YQ=='}];f.host.subscribe(0,res);assert.ok(writes.some(t=>t.includes('YQ==')));assert.equal(f.host.clients[0].size,1);res.emit('close');assert.equal(f.host.clients[0].size,0);}finally{await f.host.shutdown();}});
-test('OmeTV profile is applied exactly twice before Start and is reused without reloading',async()=>{
+test('OmeTV profile is saved twice but authorizes once before Start and is reused without reloading',async()=>{
  const f=fixture(),sequence=[];
  try{await f.host.sessionsLoaded;f.host.sessions[0]={token:'fixture-token',SnDataStr:'signed-data',SnHmac:'signature'};
- const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,login:false,verification:false,connected:false});frame.locator=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async(fn,session)=>{assert.equal(session.SnDataStr,'signed-data');assert.ok(fn.toString().includes('postMessage'));sequence.push('apply');};
- await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start']);await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start','start']);
+ const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,login:false,verification:false,connected:false});frame.locator=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async(fn,session)=>{assert.equal(session.SnDataStr,'signed-data');assert.ok(fn.toString().includes('postMessage'));assert.equal((fn.toString().match(/localStorage.setItem/g)||[]).length,2);sequence.push('apply');};
+ await f.host.start(0);assert.deepEqual(sequence,['apply','start']);await f.host.start(0);assert.deepEqual(sequence,['apply','start','start']);
  }finally{await f.host.shutdown();}
 });
 test('existing site verification stops session preparation before any apply or Start',async()=>{
@@ -19,7 +19,7 @@ test('existing site verification stops session preparation before any apply or S
  }finally{await f.host.shutdown();}
 });
 
-test('frame replacement during both applies uses the new frame without extra authorization',async()=>{
+test('frame replacement during authorization uses the new frame without authorizing again',async()=>{
  const f=fixture(),sequence=[];
  try{
   await f.host.sessionsLoaded;f.host.sessions[0]={token:'fixture-token',SnDataStr:'signed-data',SnHmac:'signature'};
@@ -31,7 +31,7 @@ test('frame replacement during both applies uses the new frame without extra aut
   f.host.slots[0].page.frames=()=>[frames[active]];
   f.host.slots[0].page.evaluate=async()=>{sequence.push('apply');active++;};
   f.host.slots[0].page.frameLocator=()=>({locator:()=>({click:async()=>sequence.push('start-'+active)})});
-  await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start-2']);
+  await f.host.start(0);assert.deepEqual(sequence,['apply','start-1']);
  }finally{await f.host.shutdown();}
 });
 test('a detach race while reading status is retried on the replacement frame',async()=>{
@@ -49,3 +49,4 @@ test('validating saved profiles never starts matching',async()=>{const f=fixture
 test('crashed slots are skipped by polling and rejected by the live client reader',async()=>{const f=fixture();try{const slot=f.host.slots[0];slot.crashed=true;slot.status='error';slot.connected=false;await f.host.tick();assert.equal(slot.status,'error');await assert.rejects(f.host.currentClient(slot),/renderer crashed/);}finally{await f.host.shutdown();}});
 test('a renderer crash during status evaluation cannot be overwritten by a stale result',async()=>{const f=fixture();try{const slot=f.host.slots[0];f.host.frame(slot).evaluate=async()=>{slot.crashed=true;slot.connected=false;slot.status='error';return {connected:true,mediaReady:true};};await f.host.tick();assert.equal(slot.status,'error');assert.equal(slot.connected,false);}finally{await f.host.shutdown();}});
 test('validation rechecks the first side after the second side loads',async()=>{const f=fixture();try{f.host.prepareSession=async i=>{if(i===1)f.host.slots[0].crashed=true;};f.host.frame(f.host.slots[0]).evaluate=async()=>({connected:false,mediaReady:true});const result=await f.host.validateSessions();assert.equal(result.ok,false);assert.equal(result.results[0].ok,false);assert.match(result.results[0].error,/renderer crashed/);}finally{await f.host.shutdown();}});
+test('validation rejects a native duplicate-window notice that arrives after the other side loads',async()=>{const f=fixture();try{let both=false;f.host.prepareSession=async i=>{if(i===1)both=true;};f.host.frame(f.host.slots[0]).evaluate=async()=>({mediaReady:true,nativeError:both?'OmeTV requires a separate active session for each side.':''});const result=await f.host.validateSessions();assert.equal(result.ok,false);assert.match(result.results[0].error,/separate active session/);}finally{await f.host.shutdown();}});
