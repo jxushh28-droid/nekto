@@ -124,24 +124,3 @@ const server=http.createServer(async(req,res)=>{try{
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
 async function shutdown(){relay.toggle(false);await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
-
-async function inspectVideoStart(){
- const probe=new VideoHost({getBrowser:getVideoBrowser,data});
- try{await probe.sessionsLoaded;
- for(let i=0;i<2;i++){
-  if(!probe.sessions[i])continue;
-  try{
-   await probe.prepareSession(i);const slot=probe.slots[i];const {frame,state}=await probe.currentClient(slot);
-   const buttons=await frame.evaluate(()=>[...document.querySelectorAll('button,[role="button"],.btn__bg')].map(e=>{
-    const r=e.getBoundingClientRect(),s=getComputedStyle(e);
-    const label=e.textContent.trim().replace(/\s+/g,' ');
-    return {tag:e.tagName,id:e.id,classes:e.className,label:/^(Start|Stop|Country|I am|Начать|Стоп|Страна|Я|Қосу|Тоқтату)/i.test(label)?label.slice(0,100):'[other-control]',disabled:e.hasAttribute('disabled'),ariaDisabled:e.getAttribute('aria-disabled'),display:s.display,visibility:s.visibility,width:Math.round(r.width),height:Math.round(r.height)};
-   }).slice(0,30));
-   let trial={ok:true};try{await probe.startControl(slot).click({trial:true,timeout:5000});}catch(e){trial={ok:false,detail:String(e.message).replace(/https?:\/\/\S+/g,'[url]').slice(0,1800)};}
-   console.log(JSON.stringify({event:'video_start_probe',slot:i===0?'A':'B',state:{login:state.login,verification:state.verification,mediaReady:state.mediaReady},buttons,trial}));
-  }catch{console.log(JSON.stringify({event:'video_start_probe',slot:i===0?'A':'B',ok:false,reason:'import-failed'}));}
-  finally{await probe.close(i);}
- }
- }finally{await probe.shutdown();}
-}
-void inspectVideoStart().catch(()=>console.log(JSON.stringify({event:'video_start_probe',ok:false,reason:'probe-unavailable'})));
