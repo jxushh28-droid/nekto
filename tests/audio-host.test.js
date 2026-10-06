@@ -129,3 +129,10 @@ test('verification after search starts also closes the browser and blocks native
  f.states[0]={status:'verification',connected:false,detail:'Nekto requires verification.'};
  await f.host.tick();await f.host.tick();assert.equal(closed,1);assert.equal(f.host.status().slots[0].stopped,true);assert.equal(f.host.requested,false);assert.equal(f.routes.at(-1),false);
  }finally{await f.done();}});
+
+test('a native prompt stops Start once and preserves the actual explanation instead of timing out',async()=>{const f=await fixture();try{
+ const s=f.host.slots[0];let reads=0,closed=0;s.browser.close=async()=>closed++;f.host.prepare=async()=>s;
+ f.host.state=async slot=>slot===s?(reads++,{status:'attention',connected:false,detail:'Nekto requires microphone permission.',authenticated:true,socketConnected:true}):f.states[1];
+ await assert.rejects(f.host.start(0),/microphone permission/);await f.host.tick();
+ const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,true);assert.equal(closed,1);assert.equal(reads,1);assert.equal(status.lastAttempt.lastState.status,'attention');
+ }finally{await f.done();}});

@@ -261,7 +261,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           this.recordDiagnostics(i,s,state.diagnostics);
           s.lastState={status:state.status,authenticated:state.authenticated===true,socketConnected:state.socketConnected===true,registrationError:Number(state.registrationError)||0};
         }
-        if(state?.status==='verification'||state?.status==='blocked'){s.failureStatus=state.status;throw Error(state.detail||'Nekto refused this voice session.');}
+        if(['verification','blocked','attention'].includes(state?.status)){s.failureStatus=state.status;throw Error(state.detail||'Nekto requires attention before starting this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
           s.stage=state.status;
@@ -370,14 +370,14 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           if(!state||this.slots[i]!==s||this.ops.has(i))continue;
           this.recordDiagnostics(i,s,state.diagnostics);
           if(state.ended){await this.close(i);continue;}
-          if(s.operationError&&!state.connected&&!['verification','blocked'].includes(state.status)){
+          if(s.operationError&&!state.connected&&!['verification','blocked','attention'].includes(state.status)){
             state.status='error';
             state.detail=s.operationError;
           }
           if(s.status!==state.status)
             console.log(JSON.stringify({event:'audio_session_status',slot:i?'B':'A',status:state.status,authenticated:state.authenticated,socketConnected:state.socketConnected}));
           Object.assign(s,{status:state.status,connected:state.connected,error:state.detail||''});
-          if(['verification','blocked'].includes(state.status))await this.stopFailed(i,s);
+          if(['verification','blocked','attention'].includes(state.status))await this.stopFailed(i,s);
         }catch(e){
           if(this.slots[i]!==s||this.setup||this.ops.has(i))continue;
           s.status='error';

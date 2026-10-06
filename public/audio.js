@@ -1,5 +1,5 @@
 const $=id=>document.getElementById(id),feeds=[null,null],nodes=[new Set(),new Set()],volume=[1,1],enabled=[false,false],schedule=[0,0];let context=null,polling=false,pending=false,restored=false,snapshot=null;
-const statuses={closed:'Не подключён',loading:'Подключаемся…',ready:'Готов',searching:'Ищем собеседника…',connected:'Собеседник подключён',ended:'Собеседник отключился',verification:'Сайт требует проверку',blocked:'Сайт отказал в подключении',error:'Ошибка'};
+const statuses={closed:'Не подключён',loading:'Подключаемся…',ready:'Готов',searching:'Ищем собеседника…',connected:'Собеседник подключён',ended:'Собеседник отключился',verification:'Сайт требует проверку',blocked:'Сайт отказал в подключении',attention:'Сайт требует действие',error:'Ошибка'};
 async function api(path,data){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});const result=await r.json();if(!r.ok){if(r.status===401){$('login').hidden=false;$('hub').hidden=true;}throw Error(result.error||'Ошибка запроса');}return result;}
 function fail(e){$('error').textContent=e.message;}
 function stop(i){feeds[i]?.close();feeds[i]=null;for(const n of nodes[i]){try{n.stop();}catch{}}nodes[i].clear();schedule[i]=0;}
