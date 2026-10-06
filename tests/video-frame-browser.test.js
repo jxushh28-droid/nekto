@@ -48,9 +48,9 @@ test('runtime detects ICE connections with streamless incoming tracks',async()=>
    const devices=await navigator.mediaDevices.enumerateDevices();
    const peer=new RTCPeerConnection();Object.defineProperty(peer,'iceConnectionState',{value:'connected',configurable:true});
    const canvas=document.createElement('canvas'),track=canvas.captureStream(15).getVideoTracks()[0],event=new Event('track');Object.defineProperties(event,{track:{value:track},streams:{value:[]}});peer.dispatchEvent(event);
-   const status=window.__videoHost.status();window.__videoHost.dispose();peer.close();track.stop();return {connected:status.connected,tracks:status.remoteTracks,camera:devices.some(d=>d.kind==='videoinput')};
+   const status=window.__videoHost.status();window.__videoHost.routing({preview:true,enabled:false,otherConnected:false});const requested=window.__videoHost.status();window.__videoHost.dispose();peer.close();track.stop();return {connected:status.connected,tracks:status.remoteTracks,backgroundGeneration:status.streamGeneration,requestedGeneration:requested.streamGeneration,camera:devices.some(d=>d.kind==='videoinput')};
   });
-  assert.equal(result.connected,true);assert.equal(result.camera,true);assert.deepEqual(result.tracks,[{kind:'video',state:'live'}]);
+  assert.equal(result.connected,true);assert.equal(result.backgroundGeneration,0);assert.equal(result.requestedGeneration,1);assert.equal(result.camera,true);assert.deepEqual(result.tracks,[{kind:'video',state:'live'}]);
  }finally{await context.close();await browser.close();}
 });
 test('dashboard restores saved sessions and retains edited values after Apply',async()=>{
