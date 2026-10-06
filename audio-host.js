@@ -4,6 +4,7 @@ import {pcmLevel} from './audio-level.js';
 import {AudioGraph} from './audio-graph.js';
 import {loadTokens,saveTokens} from './token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
+import {primeVoiceStorage} from './voice-bootstrap.js';
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
 export class AudioHost{
@@ -11,8 +12,9 @@ export class AudioHost{
  hasOpen(){return this.setup||this.ops.size>0||this.slots.some(Boolean);}
  error(e){let message=String(e?.message||e);for(const token of this.tokens||[])if(token)message=message.split(token).join('[redacted]');return /^(Nekto|Enter|Use|Audio|Close)/.test(message)?message.slice(0,200):'Audio operation failed. Disconnect this side and try again.';}
  async prepare(i){await this.loaded;if(!this.tokens[i])throw Error('Enter this side’s voice authToken first.');let s=this.slots[i];if(s?.prepared)return s;if(!s){await this.graph.ensure();const browser=await this.launch({headless:true,channel:'chromium',ignoreDefaultArgs:['--mute-audio'],args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required'],env:this.graph.browserEnv(i)});const context=await browser.newContext({viewport:{width:420,height:760},locale:'ru-RU'});await context.grantPermissions(['microphone'],{origin:'https://nekto-me.kz'});
-  await context.addInitScript(token=>localStorage.setItem('storage_audio_v2',JSON.stringify({user:{authToken:token}})),this.tokens[i]);await context.addInitScript({content:runtime});const page=await context.newPage();s={browser,context,page,status:'loading',connected:false,prepared:false,error:'',epoch:crypto.randomUUID()};this.slots[i]=s;
+  await context.addInitScript(primeVoiceStorage,this.tokens[i]);await context.addInitScript({content:runtime});const page=await context.newPage();s={browser,context,page,status:'loading',connected:false,prepared:false,error:'',epoch:crypto.randomUUID()};this.slots[i]=s;
   page.on('dialog',d=>d.dismiss().catch(()=>{}));page.on('popup',p=>p.close().catch(()=>{}));page.on('crash',()=>{s.crashed=true;s.connected=false;s.status='error';s.error='Audio browser ran out of memory. Disconnect unused modes first.';void this.graph.routing(false);this.enabled=false;});await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});}
+ const bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',...bootstrap}));if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
  await s.page.waitForFunction(voiceReady,null,{timeout:20000});const result=await s.page.evaluate(confirmVoiceSession,{token:this.tokens[i]});s.authorization=result.diagnostics;const trace=await s.page.evaluate(()=>window.__audioHost?.diagnostics?.()||[]);this.recordDiagnostics(i,s,trace);console.log(JSON.stringify({event:'audio_session_confirmation',slot:i?'B':'A',ok:result.ok,reason:result.reason,...result.diagnostics}));if(!result.ok)throw Error(result.reason==='verification-required'?'Nekto requires verification for this voice session.':result.diagnostics?.registrationError?'Nekto rejected voice registration (code '+result.diagnostics.registrationError+').':'Nekto did not confirm this voice session: '+result.reason);s.prepared=true;s.status='ready';return s;
  }
  async state(s){if(s.crashed)throw Error(s.error);let timer;try{return await Promise.race([s.page.evaluate(()=>window.__audioHost?.status()),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Audio browser did not respond.')),5000);})]);}finally{clearTimeout(timer);}}
