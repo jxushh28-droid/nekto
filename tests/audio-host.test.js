@@ -64,14 +64,14 @@ test('Start waits for current native authorization instead of trusting a previou
  const f=await fixture();try{
   let checks=0,clicks=0,preparedAt;f.host.prepare=async()=>{preparedAt=performance.now();return f.host.slots[0];};
   f.host.state=async()=>++checks===1?{status:'ready',authenticated:false,socketConnected:false}:checks===2?{status:'ready',authenticated:true,socketConnected:true}:{status:'searching',connected:false};
-  f.host.slots[0].page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>{assert.ok(performance.now()-preparedAt>=2000);assert.equal(checks,2);clicks++;}});
+  f.host.slots[0].page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>{assert.ok(performance.now()-preparedAt>=7000);assert.equal(checks,2);clicks++;}});
   await f.host.start(0);assert.equal(clicks,1);assert.equal(checks,3);
  }finally{await f.done();}
 });
-test('verification appearing during the two-second wait prevents Start',async()=>{
+test('verification appearing during the seven-second wait prevents Start',async()=>{
  const f=await fixture();try{
   let clicks=0,preparedAt;f.host.prepare=async()=>{preparedAt=performance.now();return f.host.slots[0];};
-  f.host.state=async()=>{assert.ok(performance.now()-preparedAt>=2000);return {status:'verification',authenticated:true,socketConnected:true};};
+  f.host.state=async()=>{assert.ok(performance.now()-preparedAt>=7000);return {status:'verification',authenticated:true,socketConnected:true};};
   f.host.slots[0].page.locator=()=>({isVisible:async()=>true,click:async()=>clicks++});
   await assert.rejects(f.host.start(0),/requires attention/);assert.equal(clicks,0);assert.equal(f.host.slots[0].stopped,true);
  }finally{await f.done();}

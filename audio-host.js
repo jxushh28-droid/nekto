@@ -262,7 +262,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       // State is checked again after the wait, before any Start click.
       s.stage='wait-before-start';
       this.recordAttempt(i,s);
-      await new Promise(resolve=>setTimeout(resolve,2000));
+      await new Promise(resolve=>setTimeout(resolve,7000));
       if(this.slots[i]!==s||s.stopped)throw Error('Audio session closed before starting the call.');
       s.stage='before-start';
       for(let n=0,clicked=false;n<30;n++){
