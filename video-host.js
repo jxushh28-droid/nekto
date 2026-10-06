@@ -79,7 +79,7 @@ export class VideoHost{
    slot.preparedToken=null;const failure=videoFailure(e,stage,this.sessions);
    console.warn(JSON.stringify({event:'video_session_failed',slot:i===0?'A':'B',...failure}));
    slot.error='OmeTV session failed at '+failure.stage+': '+failure.reason;
-   throw new Error(/^(OmeTV requires|OmeTV did not accept|OmeTV client)/.test(e.message)?e.message:slot.error);
+   throw new Error(/^(OmeTV requires|OmeTV did not accept|OmeTV client|OmeTV has restricted|OmeTV could not)/.test(e.message)?e.message:slot.error);
   }finally{slot.busy=false;}
  }
  async applySessions(values){const sessions=validateVideoSessions(values);if(this.sessionSetup)throw new Error('Video session setup is busy.');this.sessionSetup=true;try{await this.sessionsLoaded;await this.close(0);await this.close(1);await saveVideoSessions(this.data,sessions);this.sessions=sessions;const results=[];for(let i=0;i<2;i++){try{await this.start(i);results.push({slot:i,ok:true});}catch(e){const error=/^(OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV requires|OmeTV did not accept|OmeTV client|Could not apply|Could not open|The video bridge)/.test(e.message)?e.message:'Hosted video connection failed.';if(this.slots[i])this.slots[i].error=error;results.push({slot:i,ok:false,error});}}return {ok:results.every(r=>r.ok),results};}finally{this.sessionSetup=false;}}
