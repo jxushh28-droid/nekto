@@ -137,3 +137,17 @@ test('a native prompt stops Start once and preserves the actual explanation inst
  await assert.rejects(f.host.start(0),/microphone permission/);await f.host.tick();
  const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,true);assert.equal(closed,1);assert.equal(reads,1);assert.equal(status.lastAttempt.lastState.status,'attention');
  }finally{await f.done();}});
+
+test('microphone diagnosis selects the assigned source and omits device metadata',async()=>{
+ const graph=new AudioGraph(),calls=[];graph.pactl=async(...args)=>{calls.push(args);return JSON.stringify(args.at(-1)==='sources'?[{index:10,name:'nekto_mic_A',properties:{private:'not-for-logs'}},{index:20,name:'nekto_mic_B'}]:[{source:10,mute:false},{source:20,mute:false},{source:10,mute:true}]);};
+ assert.deepEqual(await graph.inputStatus(0),{devicePresent:true,openInputs:2,unmutedInputs:1});assert.deepEqual(await graph.inputStatus(1),{devicePresent:true,openInputs:1,unmutedInputs:1});assert.ok(calls.every(args=>args[2]==='list'));
+ graph.pactl=async()=>JSON.stringify([]);assert.deepEqual(await graph.inputStatus(0),{devicePresent:false,openInputs:0,unmutedInputs:0});
+});
+test('failed call preserves microphone diagnosis before browser teardown without opening a microphone',async()=>{const f=await fixture();try{
+ const s=f.host.slots[0],actions=[];s.browser.close=async()=>actions.push('close');f.host.graph.inputStatus=async()=>{actions.push('read');return {devicePresent:true,openInputs:1,unmutedInputs:1};};
+ await f.host.stopFailed(0,s);assert.deepEqual(actions,['read','close']);assert.deepEqual(f.host.status().slots[0].lastAttempt.microphone,{phase:'before-stop',available:true,devicePresent:true,openInputs:1,unmutedInputs:1});
+ }finally{await f.done();}});
+test('failed audio diagnostic cannot prevent browser teardown or invent a missing microphone',async()=>{const f=await fixture();try{
+ let closed=0;f.host.slots[0].browser.close=async()=>closed++;f.host.graph.inputStatus=async()=>{throw Error('private daemon detail');};
+ await f.host.stopFailed(0,f.host.slots[0]);assert.equal(closed,1);assert.deepEqual(f.host.status().slots[0].microphone,{phase:'before-stop',available:false});
+ }finally{await f.done();}});

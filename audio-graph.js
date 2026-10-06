@@ -16,6 +16,12 @@ export class AudioGraph{
   const inputs=JSON.parse(await this.pactl('-f','json','list','sink-inputs'));this.inputs=this.loops.map(id=>inputs.find(input=>Number(input.owner_module)===id)?.index);if(this.inputs.some(i=>i==null))throw Error('Audio routing unavailable');this.routeKey=null;await this.routing(false);return this;
  }
  browserEnv(i){const l=i?'B':'A';return {...this.env,PULSE_SINK:'nekto_output_'+l,PULSE_SOURCE:'nekto_mic_'+l};}
+ async inputStatus(i){
+  const [sources,outputs]=await Promise.all([this.pactl('-f','json','list','sources'),this.pactl('-f','json','list','source-outputs')]);
+  const source=JSON.parse(sources).find(item=>item.name==='nekto_mic_'+(i?'B':'A'));
+  const inputs=source?JSON.parse(outputs).filter(item=>String(item.source)===String(source.index)):[];
+  return {devicePresent:!!source,openInputs:inputs.length,unmutedInputs:inputs.filter(item=>item.mute===false).length};
+ }
  routing(enabled){this.chain=this.chain.catch(()=>{}).then(async()=>{if(this.routeKey===enabled)return;this.routeKey=null;let failure;for(const id of this.inputs){try{await this.pactl('set-sink-input-mute',String(id),enabled?'0':'1');}catch(e){failure=e;if(enabled)throw e;}}if(failure)throw failure;this.routeKey=enabled;});return this.chain;}
  capture(i){return spawn('ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-f','pulse','-i','nekto_output_'+(i?'B':'A')+'.monitor','-ac','1','-ar','24000','-f','s16le','pipe:1'],{env:this.env,stdio:['ignore','pipe','ignore']});}
  async close(){this.process?.kill('SIGTERM');this.process=null;this.ready=null;this.inputs=[];this.loops=[];this.routeKey=null;if(this.directory)await rm(this.directory,{recursive:true,force:true}).catch(()=>{});this.directory=null;}

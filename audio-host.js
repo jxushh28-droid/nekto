@@ -263,6 +263,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           this.recordDiagnostics(i,s,state.diagnostics);
           s.lastState={status:state.status,authenticated:state.authenticated===true,socketConnected:state.socketConnected===true,registrationError:Number(state.registrationError)||0};
         }
+        if(s.stage==='wait-search'&&!s.microphone)await this.inspectMicrophone(i,s,'after-start');
         if(['verification','blocked','attention'].includes(state?.status)){s.failureStatus=state.status;throw Error(state.detail||'Nekto requires attention before starting this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
@@ -347,7 +348,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null};
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
   }
 
   recordDiagnostics(i,s,entries=[]){
@@ -437,6 +438,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         error:s?.error||s?.captureError||'',
         authorization:s?.authorization||null,
         diagnostics:s?.diagnostics||[],
+        microphone:s?.microphone||null,
         level:s?.connected&&Date.now()-(s.levelAt||0)<500?s?.meter?.level||0:0,
         db:s?.connected&&Date.now()-(s.levelAt||0)<500?s?.meter?.db??-60:-60
       }))
@@ -509,6 +511,17 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     });
   }
 
+  async inspectMicrophone(i,s,phase){
+    if(typeof this.graph.inputStatus!=='function')return;
+    let device;
+    try{device={available:true,...await this.graph.inputStatus(i)};}
+    catch{device={available:false};}
+    if(this.slots[i]!==s)return;
+    s.microphone={phase,...device};
+    console.log(JSON.stringify({event:'audio_microphone_diagnostic',slot:i?'B':'A',attemptId:s.epoch,...s.microphone}));
+    this.recordAttempt(i,s);
+  }
+
   async stopFailed(i,s){
     if(this.slots[i]!==s||s.stopped)return;
     s.stopped=true;s.connected=false;this.requested=false;this.enabled=false;
@@ -518,6 +531,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     this.clients[i].clear();
     console.warn(JSON.stringify({event:'audio_session_stopped',slot:i?'B':'A',attemptId:s.epoch,stage:s.stage,status:s.status}));
     if(this.graph.process)await this.graph.routing(false).catch(()=>{});
+    await this.inspectMicrophone(i,s,'before-stop');
     await s.browser.close().catch(()=>{});
   }
 
