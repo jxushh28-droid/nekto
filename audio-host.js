@@ -257,6 +257,10 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       s.stage='before-start';
       for(let n=0,clicked=false;n<30;n++){
         const state=await this.state(s);
+        if(state){
+          this.recordDiagnostics(i,s,state.diagnostics);
+          s.lastState={status:state.status,authenticated:state.authenticated===true,socketConnected:state.socketConnected===true,registrationError:Number(state.registrationError)||0};
+        }
         if(state?.status==='verification'||state?.status==='blocked'){s.failureStatus=state.status;throw Error(state.detail||'Nekto refused this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
@@ -341,7 +345,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null};
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null};
   }
 
   recordDiagnostics(i,s,entries=[]){
