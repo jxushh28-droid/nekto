@@ -20,7 +20,7 @@ relay.toggle(true);
 const safeError=e=>{let text=String(e?.message||e);for(const token of configuredTokens)if(token)text=text.split(token).join('[redacted]');return text.slice(0,180);};
 const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});configuredTokens=await loadTokens(data);
 let browser=null,launching=null,videoBrowser=null,videoLaunching=null;
-async function getVideoBrowser(){if(videoBrowser?.isConnected())return videoBrowser;if(!videoLaunching)videoLaunching=chromium.launch({headless:true,args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required']}).then(b=>{videoBrowser=b;return b;}).finally(()=>videoLaunching=null);return videoLaunching;}
+async function getVideoBrowser(){if(videoBrowser?.isConnected())return videoBrowser;if(!videoLaunching)videoLaunching=chromium.launch({headless:true,args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream']}).then(b=>{videoBrowser=b;return b;}).finally(()=>videoLaunching=null);return videoLaunching;}
 const video=new VideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/chat/';
@@ -88,6 +88,8 @@ const server=http.createServer(async(req,res)=>{try{
  }
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
  if(url.pathname==='/api/video/status'&&req.method==='GET')return json(res,200,video.status());
+ if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{sessions:video.sessions});}
+ if(url.pathname==='/api/video/diagnostics'&&req.method==='GET')return json(res,200,await video.inspect());
  if(url.pathname==='/api/video/sessions'&&req.method==='POST'){if(videoOps.size||video.slots.some(s=>s?.busy)||video.sessionSetup)return json(res,409,{error:'Video session is busy'});const b=await body(req,80000);try{return json(res,200,await video.applySessions(b.sessions));}catch(e){return json(res,400,{error:/^(Paste the complete|OmeTV session requires|Provide two|Use two|Video session setup)/.test(e.message)?e.message:'Could not save the OmeTV sessions.'});}}
  if(url.pathname==='/api/video/toggle'&&req.method==='POST'){const b=await body(req);await video.toggle(!!b.enabled,!!b.consent);return json(res,200,{ok:true});}
  if(url.pathname==='/api/video/test'&&req.method==='POST')return json(res,200,await video.test(Number(process.env.PORT||3000)));

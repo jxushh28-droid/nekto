@@ -36,3 +36,38 @@ test('real Chromium follows replaced iframe and clicks the native container when
   assert.deepEqual(result,{applications:2,starts:1});
  }finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
 });
+test('runtime detects ICE connections with streamless incoming tracks',async()=>{
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream']});
+ const context=await browser.newContext();
+ const {readFile}=await import('node:fs/promises');
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://ometv.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="local-video"></video><video id="remote-video"></video><input id="chat-text">'}));
+  const page=await context.newPage();await page.goto('https://ometv.chat/embed/index.html');
+  const result=await page.evaluate(async()=>{
+   const devices=await navigator.mediaDevices.enumerateDevices();
+   const peer=new RTCPeerConnection();Object.defineProperty(peer,'iceConnectionState',{value:'connected',configurable:true});
+   const canvas=document.createElement('canvas'),track=canvas.captureStream(15).getVideoTracks()[0],event=new Event('track');Object.defineProperties(event,{track:{value:track},streams:{value:[]}});peer.dispatchEvent(event);
+   const status=window.__videoHost.status();window.__videoHost.dispose();peer.close();track.stop();return {connected:status.connected,tracks:status.remoteTracks,camera:devices.some(d=>d.kind==='videoinput')};
+  });
+  assert.equal(result.connected,true);assert.equal(result.camera,true);assert.deepEqual(result.tracks,[{kind:'video',state:'live'}]);
+ }finally{await context.close();await browser.close();}
+});
+test('dashboard restores saved sessions and retains edited values after Apply',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ const page=await browser.newPage();let imports=0,loads=0;
+ const saved=[{token:'saved-A',SnDataStr:'data-A',SnHmac:'hmac-A'},{token:'saved-B',SnDataStr:'data-B',SnHmac:'hmac-B'}];
+ try{
+  await page.route('https://dashboard.test/**',async route=>{
+   const req=route.request(),path=new URL(req.url()).pathname;
+   if(path==='/api/video/status')return route.fulfill({json:{slots:[0,1].map(i=>({label:i===0?'A':'B',open:false,status:'closed',connected:false,busy:false})),sessionConfigured:[true,true]}});
+   if(path==='/api/video/sessions'){if(req.method()==='GET'){loads++;return route.fulfill({json:{sessions:saved}});}imports++;assert.deepEqual(req.postDataJSON().sessions,[JSON.stringify(saved[0]),'edited-B']);return route.fulfill({json:{ok:false,results:[{slot:0,ok:false,error:'fixture refusal'}]}});}
+   const file=path==='/video'?'../public/video.html':path==='/video.js'?'../public/video.js':path==='/stream-player.js'?'../browser/stream-player.js':null;
+   return route.fulfill({contentType:path.endsWith('.js')?'application/javascript':'text/html',body:file?await readFile(new URL(file,import.meta.url),'utf8'):''});
+  });
+  await page.goto('https://dashboard.test/video');await page.waitForFunction(()=>document.getElementById('sessionB').value.includes('saved-B'));
+  await page.locator('#sessionB').fill('edited-B');await page.locator('#applySessions').click();await page.waitForFunction(()=>document.getElementById('error').textContent.includes('fixture refusal'));
+  assert.equal(await page.locator('#sessionB').inputValue(),'edited-B');assert.equal(await page.locator('#sessionA').inputValue(),JSON.stringify(saved[0]));assert.equal(imports,1);assert.equal(loads,1);
+  await page.reload();await page.waitForFunction(()=>document.getElementById('sessionB').value.includes('saved-B'));assert.equal(loads,2);
+ }finally{await browser.close();}
+});
