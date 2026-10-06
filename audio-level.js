@@ -1,0 +1,2 @@
+// PCM16 level, measured from the native browser output rather than a guessed speaking state.
+export function pcmLevel(bytes){let sum=0,peak=0;const count=Math.floor(bytes.length/2);for(let n=0;n<count;n++){const sample=bytes.readInt16LE(n*2)/32768;sum+=sample*sample;peak=Math.max(peak,Math.abs(sample));}const rms=count?Math.sqrt(sum/count):0;const db=rms?Math.max(-60,20*Math.log10(rms)):-60;return {level:Math.round((db+60)/60*100),db:Math.round(db),peak:Math.round(peak*100)};}
