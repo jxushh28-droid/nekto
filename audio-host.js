@@ -64,6 +64,72 @@ export class AudioHost{
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
+      function redactWsText(value) {
+  return String(value)
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+      "[UUID]"
+    )
+    .replace(/\b[0-9a-f]{64}\b/gi, "[HEX64]")
+    .replace(
+      /("(?:auth_?token|token|access_?token|refresh_?token|authorization|password|secret|cookie|SnDataStr|SnHmac)"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
+      '$1"[REDACTED]"'
+    );
+}
+
+function safeSocketUrl(raw) {
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    url.hash = "";
+    for (const key of [...url.searchParams.keys()]) {
+      url.searchParams.set(key, "[REDACTED]");
+    }
+    return redactWsText(url.href);
+  } catch {
+    return "[unavailable]";
+  }
+}
+
+let socketSequence = 0;
+
+page.on("websocket", ws => {
+  const socketId = ++socketSequence;
+  let frameSequence = 0;
+
+  const log = (event, details = {}) => {
+    console.log(JSON.stringify({
+      time: new Date().toISOString(),
+      socketId,
+      event,
+      ...details
+    }));
+  };
+
+  log("created", { url: safeSocketUrl(ws.url()) });
+
+  const logFrame = (direction, { payload }) => {
+    const binary = Buffer.isBuffer(payload);
+    log(direction, {
+      frameSequence: ++frameSequence,
+      binary,
+      bytes: binary
+        ? payload.length
+        : Buffer.byteLength(payload, "utf8"),
+      payload: redactWsText(
+        binary ? payload.toString("utf8") : payload
+      )
+    });
+  };
+
+  ws.on("framesent", frame => logFrame("sent", frame));
+  ws.on("framereceived", frame => logFrame("received", frame));
+  ws.on("socketerror", error =>
+    log("error", { message: redactWsText(error) })
+  );
+  ws.on("close", () => log("closed"));
+});
       s={browser,context,page,status:'loading',connected:false,prepared:false,error:'',epoch:crypto.randomUUID()};
       this.slots[i]=s;
 
@@ -106,6 +172,50 @@ export class AudioHost{
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
     await s.page.waitForFunction(voiceReady,null,{timeout:20000});
+    const registrationDiagnostic = await page.evaluate(() => {
+  const stores = [...document.querySelectorAll("*")]
+    .map(el => el.__vue__?.$store)
+    .filter(store => store?.state?.system && store.state.user);
+
+  const store = stores[0];
+  if (!store) return { clientFound: false };
+
+  const { system, user, chat } = store.state;
+
+  let savedToken = null;
+  let storageReadable = true;
+
+  try {
+    savedToken = JSON.parse(
+      localStorage.getItem("storage_audio_v2") || "{}"
+    )?.user?.authToken ?? null;
+  } catch {
+    storageReadable = false;
+  }
+
+  return {
+    clientFound: true,
+    firstLoadCompleted: system.isFirstLoaded === true,
+    clientAuthFlag: system.isAuth === true,
+    socketConnected: system.socketConnected === true,
+    registrationError: system.errorRegistered ?? null,
+    disconnectReason: system.forceDisconnectReason ?? null,
+    captchaRequired: !!system.captchaRequired,
+    hcaptchaRequired: !!system.hcaptchaRequired,
+    liveTokenPresent: !!user.authToken,
+    savedTokenPresent: !!savedToken,
+    savedMatchesLive:
+      !!savedToken && savedToken === user.authToken,
+    storageReadable,
+    identityPresent: user.tokenId != null,
+    searching: !!user.isSearching,
+    callPresent: chat?.activeConnectionId != null
+  };
+});
+
+console.log(
+  redactWsText(JSON.stringify(registrationDiagnostic, null, 2))
+);
     const result=await s.page.evaluate(confirmVoiceSession,{token:this.tokens[i]});
     s.authorization=result.diagnostics;
 
