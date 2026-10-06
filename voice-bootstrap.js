@@ -19,8 +19,8 @@ export function primeVoiceStorage(token) {
   let saved;
   try {
     saved = JSON.parse(raw || '{}');
-  } catch (e) {
-    return fail(`json-parse:${e?.message || e}`);
+  } catch {
+    return fail('json-parse:invalid-json');
   }
 
   if (saved === null || typeof saved !== 'object' || Array.isArray(saved)) {
@@ -43,8 +43,8 @@ export function primeVoiceStorage(token) {
   let matches;
   try {
     matches = JSON.parse(localStorage.getItem(key))?.user?.authToken === token;
-  } catch (e) {
-    return fail(`verify-read:${e?.message || e}`);
+  } catch {
+    return fail('verify-read:failed');
   }
 
   window.__voiceTokenBootstrap = matches

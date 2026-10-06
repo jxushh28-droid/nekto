@@ -45,10 +45,22 @@ test('empty storage creates the audio token; invalid or inaccessible storage rep
   assert.equal(run(null, {denied: true}).status.ok, false);
 });
 
-test('bootstrap does not write tokens to unrelated origins or subframes', () => {
-  for (const options of [{origin: 'https://unrelated.test'}, {frame: true}]) {
-    const result = run(null, options);
-    assert.equal(result.writes, 0);
-    assert.equal(result.status, undefined);
-  }
+test('unrelated origins are not written and report the explicit mismatch', () => {
+  const result = run(null, {origin: 'https://unrelated.test'});
+  assert.equal(result.writes, 0);
+  assert.equal(result.status.ok, false);
+  assert.equal(result.status.reason, 'origin-mismatch:https://unrelated.test/audiochat');
+});
+
+test('matching-origin subframes retain the edited bootstrap behavior', () => {
+  const result = run(null, {frame: true});
+  assert.equal(result.writes, 1);
+  assert.equal(result.status.ok, true);
+});
+
+test('malformed storage reports the parse stage without exposing stored values', () => {
+  const result = run('old-private-fixture-token');
+  assert.equal(result.status.ok, false);
+  assert.match(result.status.reason, /^json-parse:/);
+  assert.equal(JSON.stringify(result.status).includes('old-private-fixture-token'), false);
 });

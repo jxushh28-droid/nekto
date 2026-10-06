@@ -95,8 +95,8 @@ export class AudioHost{
           localStorage.setItem(key,JSON.stringify(saved));
           const matches=JSON.parse(localStorage.getItem(key))?.user?.authToken===token;
           window.__voiceTokenBootstrap={ok:matches,reason:matches?'evaluate-fallback':'fallback-mismatch'};
-        }catch(e){
-          window.__voiceTokenBootstrap={ok:false,reason:'evaluate-fallback-failed:'+(e?.message||e)};
+        }catch{
+          window.__voiceTokenBootstrap={ok:false,reason:'evaluate-fallback-failed'};
         }
       },{token:this.tokens[i],key:'storage_audio_v2'});
       bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});
