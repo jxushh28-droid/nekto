@@ -5,3 +5,16 @@ test('media forwards only with enabled routing, and old-generation segments are 
 test('private video text uses only the selected side',async()=>{const f=fixture();try{await f.host.send(0,'original message');assert.ok(f.calls[0].some(c=>c.text==='original message'));assert.equal(f.calls[1].length,0);}finally{await f.host.shutdown();}});
 test('closing one video session disables forwarding and clears the other incoming stream',async()=>{const f=fixture();f.host.enabled=true;await f.host.close(0);assert.equal(f.host.slots[0],null);assert.ok(f.host.slots[1]);assert.equal(f.host.enabled,false);assert.ok(f.calls[1].some(c=>c.fn?.includes('clearIncoming')));await f.host.shutdown();});
 test('stream subscriptions replay initial headers and clean up on disconnect',async()=>{const f=fixture(),res=new EventEmitter(),writes=[];res.writeHead=()=>{};res.write=text=>{writes.push(text);return true;};res.end=()=>res.emit('close');try{f.host.slots[0].cache=[{generation:'one',data:'YQ=='}];f.host.subscribe(0,res);assert.ok(writes.some(t=>t.includes('YQ==')));assert.equal(f.host.clients[0].size,1);res.emit('close');assert.equal(f.host.clients[0].size,0);}finally{await f.host.shutdown();}});
+test('OmeTV profile is applied exactly twice before Start and is reused without reloading',async()=>{
+ const f=fixture(),sequence=[];
+ try{await f.host.sessionsLoaded;f.host.sessions[0]={token:'fixture-token',SnDataStr:'signed-data',SnHmac:'signature'};
+ const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,login:false,verification:false,connected:false});frame.getByText=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async(fn,session)=>{assert.equal(session.SnDataStr,'signed-data');assert.ok(fn.toString().includes('postMessage'));sequence.push('apply');};
+ await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start']);await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start','start']);
+ }finally{await f.host.shutdown();}
+});
+test('existing site verification stops session preparation before any apply or Start',async()=>{
+ const f=fixture(),sequence=[];
+ try{await f.host.sessionsLoaded;f.host.sessions[0]={token:'fixture-token',SnDataStr:'signed-data',SnHmac:'signature'};
+ const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,verification:true,connected:false});frame.getByText=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async()=>sequence.push('apply');await assert.rejects(f.host.start(0),/requires verification/);assert.deepEqual(sequence,[]);assert.equal(f.host.slots[0].preparedToken,null);
+ }finally{await f.host.shutdown();}
+});
