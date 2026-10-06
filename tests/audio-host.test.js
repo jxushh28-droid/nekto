@@ -1,6 +1,42 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
 import {loadAudioTokens} from '../audio-token-config.js';
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
+test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['diagnostic-fixture-token',null];let calls=0;
+  const page=f.host.slots[0].page;page.waitForFunction=async()=>{};
+  page.evaluate=async fn=>{
+   calls++;
+   if(fn===confirmVoiceSession)return {ok:true,reason:'native-session-confirmed',diagnostics:{authenticated:true,socketConnected:true}};
+   if(fn.toString().includes('const stores'))return {clientFound:true,clientAuthFlag:true};
+   if(fn.toString().includes('__voiceTokenBootstrap'))return {ok:true,reason:'saved-before-startup'};
+   return [];
+  };
+  const slot=await f.host.prepare(0);
+  assert.equal(slot.page,page);assert.equal(slot.prepared,true);assert.equal(calls,4);
+ }finally{await f.done();}
+});
+test('persistent WebSocket logging records metadata without payloads or raw errors',async()=>{
+ const f=await fixture(),originalLog=console.log,logs=[];
+ try{
+  f.host.tokens=['logging-fixture-token',null];f.host.slots[0]=null;
+  f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
+  const page=new EventEmitter();page.goto=async()=>{};page.waitForFunction=async()=>{};
+  page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
+  const context={grantPermissions:async()=>{},addInitScript:async()=>{},newPage:async()=>page};
+  f.host.launch=async()=>({newContext:async()=>context,close:async()=>{}});
+  console.log=value=>logs.push(String(value));
+  await f.host.prepare(0);
+  const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/?token=private-query-value';
+  page.emit('websocket',ws);
+  ws.emit('framesent',{payload:'42["event",{"s":"private-payload-value"}]'});
+  ws.emit('framereceived',{payload:Buffer.from('private-binary-value')});
+  ws.emit('socketerror','private-error-value');
+  const all=logs.join('\n');for(const value of ['private-query-value','private-payload-value','private-binary-value','private-error-value'])assert.equal(all.includes(value),false);
+  const frames=logs.map(value=>{try{return JSON.parse(value);}catch{return {};}}).filter(value=>['sent','received'].includes(value.event));
+  assert.equal(frames.length,2);assert.ok(frames.every(value=>value.payloadOmitted===true&&!('payload' in value)&&value.bytes>0));
+ }finally{console.log=originalLog;await f.done();}
+});
 test('single-token test opens only the selected side and persists an otherwise empty configuration',async()=>{
  for(const side of [0,1]){const f=await fixture();try{
   const starts=[];f.host.requested=true;f.host.start=async i=>starts.push(i);

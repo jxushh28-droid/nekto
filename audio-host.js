@@ -10,6 +10,20 @@ import {primeVoiceStorage} from './voice-bootstrap.js';
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
 
+function redactWsText(value) {
+  return String(value)
+    .replace(
+      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
+      "[UUID]"
+    )
+    .replace(/\b[0-9a-f]{64}\b/gi, "[HEX64]")
+    .replace(
+      /("(?:auth_?token|token|access_?token|refresh_?token|authorization|password|secret|cookie|SnDataStr|SnHmac)"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
+      '$1"[REDACTED]"'
+    );
+}
+
+
 export class AudioHost{
   constructor({data,graph=new AudioGraph(),launch=options=>chromium.launch(options)}){
     this.data=data+'/audio';
@@ -64,18 +78,6 @@ export class AudioHost{
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
-      function redactWsText(value) {
-  return String(value)
-    .replace(
-      /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi,
-      "[UUID]"
-    )
-    .replace(/\b[0-9a-f]{64}\b/gi, "[HEX64]")
-    .replace(
-      /("(?:auth_?token|token|access_?token|refresh_?token|authorization|password|secret|cookie|SnDataStr|SnHmac)"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
-      '$1"[REDACTED]"'
-    );
-}
 
 function safeSocketUrl(raw) {
   try {
@@ -117,17 +119,13 @@ page.on("websocket", ws => {
       bytes: binary
         ? payload.length
         : Buffer.byteLength(payload, "utf8"),
-      payload: redactWsText(
-        binary ? payload.toString("utf8") : payload
-      )
+      payloadOmitted: true
     });
   };
 
   ws.on("framesent", frame => logFrame("sent", frame));
   ws.on("framereceived", frame => logFrame("received", frame));
-  ws.on("socketerror", error =>
-    log("error", { message: redactWsText(error) })
-  );
+  ws.on("socketerror", () => log("error"));
   ws.on("close", () => log("closed"));
 });
       s={browser,context,page,status:'loading',connected:false,prepared:false,error:'',epoch:crypto.randomUUID()};
@@ -172,7 +170,7 @@ page.on("websocket", ws => {
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
     await s.page.waitForFunction(voiceReady,null,{timeout:20000});
-    const registrationDiagnostic = await page.evaluate(() => {
+    const registrationDiagnostic = await s.page.evaluate(() => {
   const stores = [...document.querySelectorAll("*")]
     .map(el => el.__vue__?.$store)
     .filter(store => store?.state?.system && store.state.user);
