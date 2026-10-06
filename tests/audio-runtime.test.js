@@ -23,3 +23,9 @@ test('native ban popup remains blocked and CAPTCHA keeps precedence over a promp
 test('hidden native popups do not stop a call',()=>{
  const f=fixture({elements:{'.swal2-popup':{isConnected:true,checkVisibility:()=>false}}});f.state.system.isAuth=true;f.state.chat.activeConnectionId='fixture-call';assert.equal(f.client.status().status,'connected');
 });
+test('restriction checkpoint identifies the visible native mask without copying its text',()=>{
+ const f=fixture({elements:{'#mask_bad_inet':shown('private native prompt')}});
+ const state=f.client.status();assert.equal(state.restrictionSource,'#mask_bad_inet');assert.equal(state.disconnectCode,null);
+ f.state.system.forceDisconnectReason=425;assert.equal(f.client.status().disconnectCode,425);
+ assert.equal(JSON.stringify(f.client.diagnostics()).includes('private native prompt'),false);
+});

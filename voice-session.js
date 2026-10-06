@@ -1,4 +1,4 @@
-export function voiceReady(){return [...document.querySelectorAll('*')].some(e=>e.__vue__?.$store?.state?.system&&(e.__vue__.$store.state.system.isFirstLoaded||e.__vue__.$store.state.system.captchaRequired||e.__vue__.$store.state.system.hcaptchaRequired||e.__vue__.$store.state.system.forceDisconnectReason||e.__vue__.$store.state.system.errorRegistered));}
+export function voiceReady(){return [...document.querySelectorAll('*')].some(e=>{const s=e.__vue__?.$store?.state;if(!s?.system||!s.user)return false;return !!(s.system.isFirstLoaded||s.system.captchaRequired||s.system.hcaptchaRequired||s.system.forceDisconnectReason||s.system.errorRegistered||s.system.isAuth&&s.system.socketConnected&&s.user.tokenId!=null);});}
 // Observe the voice client's normal startup. Do not change its live store or reauthorize.
 export function confirmVoiceSession({token,timeout=10000}){
  const vm=[...document.querySelectorAll('*')].map(e=>e.__vue__).find(v=>v?.$store?.state?.system&&v.$store.state.user);if(!vm)return {ok:false,reason:'client-not-ready'};const store=vm.$store;

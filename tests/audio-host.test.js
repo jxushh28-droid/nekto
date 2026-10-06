@@ -2,6 +2,14 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {m
 import {loadAudioTokens} from '../audio-token-config.js';
 import {AudioGraph} from '../audio-graph.js';
 import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {voiceReady} from '../voice-session.js';
+import {runInNewContext} from 'node:vm';
+test('authorized native client is ready without the optional isFirstLoaded flag',()=>{
+ const state={system:{isAuth:true,socketConnected:true},user:{tokenId:123}};
+ const sandbox={document:{querySelectorAll:()=>[{__vue__:{$store:{state}}}]}};
+ assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),true);
+ state.system.isAuth=false;assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),false);
+});
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
@@ -117,6 +125,21 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   const frames=logs.map(value=>{try{return JSON.parse(value);}catch{return {};}}).filter(value=>['sent','received'].includes(value.event));
   assert.equal(frames.length,2);assert.ok(frames.every(value=>value.payloadOmitted===true&&!('payload' in value)&&value.bytes>0));
  }finally{console.log=originalLog;await f.done();}
+});
+test('authorization-only token check prepares one side without clicking Start or changing the other token',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=[null,'other-fixture-token'];let starts=0;const checked=[];
+  f.host.start=async()=>starts++;f.host.checkAuthorization=async i=>checked.push(i);
+  const result=await f.host.applySingle(0,'check-fixture-token',{startCall:false});
+  assert.equal(result.ok,true);assert.equal(result.operation,'authorization');assert.deepEqual(checked,[0]);assert.equal(starts,0);
+  assert.deepEqual(await loadAudioTokens(f.host.data),['check-fixture-token','other-fixture-token']);
+ }finally{await f.done();}
+});
+test('latest restriction source is retained after the socket disconnects',async()=>{
+ const f=await fixture();try{
+  f.states[0]={status:'blocked',connected:false,authenticated:false,socketConnected:false,restrictionSource:'#mask_bad_inet',disconnectCode:425};
+  await f.host.tick();assert.equal(f.host.status().slots[0].lastAttempt.lastState.restrictionSource,'#mask_bad_inet');assert.equal(f.host.status().slots[0].lastAttempt.lastState.socketConnected,false);
+ }finally{await f.done();}
 });
 test('single-token test opens only the selected side and persists an otherwise empty configuration',async()=>{
  for(const side of [0,1]){const f=await fixture();try{

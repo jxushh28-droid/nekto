@@ -97,6 +97,7 @@ const server=http.createServer(async(req,res)=>{try{
   const b=await body(req);try{
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
    const single=url.pathname.match(/^\/api\/audio\/([01])\/token$/);if(single)return json(res,200,await audio.applySingle(Number(single[1]),b.token));
+   const check=url.pathname.match(/^\/api\/audio\/([01])\/check$/);if(check)return json(res,200,await audio.applySingle(Number(check[1]),b.token,{startCall:false}));
    if(url.pathname==='/api/audio/connect'){await audio.consent(b.consent);return json(res,200,await audio.connectBoth());}
    if(url.pathname==='/api/audio/consent'){await audio.consent(b.consent);return json(res,200,{ok:true});}
    const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|close)$/);if(m){const i=Number(m[1]);if(m[2]==='start')await audio.start(i);else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}

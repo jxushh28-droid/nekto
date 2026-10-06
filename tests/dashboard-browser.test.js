@@ -56,8 +56,8 @@ test('single-side audio test accepts one token, never submits B, and retains A a
    if(url.pathname.startsWith('/api/')){
     if(route.request().method()==='POST'){
      submissions.push({path:url.pathname,data:JSON.parse(route.request().postData())});
-     assert.equal(url.pathname,'/api/audio/0/token');saved[0]=submissions.at(-1).data.token;
-     body=JSON.stringify({ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'}]});
+     assert.ok(['/api/audio/0/token','/api/audio/0/check'].includes(url.pathname));saved[0]=submissions.at(-1).data.token;
+     body=JSON.stringify(url.pathname.endsWith('/check')?{ok:true,operation:'authorization',results:[{slot:0,ok:true}]}:{ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'}]});
     }else body=JSON.stringify(url.pathname.endsWith('/tokens')?{tokens:saved}:status);
    }else{
     const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';
@@ -71,6 +71,8 @@ test('single-side audio test accepts one token, never submits B, and retains A a
   assert.equal(await page.locator('#tokenA').inputValue(),'single-fixture-token');
   await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value==='single-fixture-token');
   assert.equal(await page.locator('#tokenB').inputValue(),'');assert.equal(submissions.length,1);
+  await page.locator('#checkTokenA').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('токен подтверждён, звонок не начат'));
+  assert.deepEqual(submissions[1],{path:'/api/audio/0/check',data:{token:'single-fixture-token'}});assert.equal(submissions.length,2);
  }finally{await browser.close();}
 });
 

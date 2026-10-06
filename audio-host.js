@@ -276,10 +276,10 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         const state=await this.state(s);
         if(state){
           this.recordDiagnostics(i,s,state.diagnostics);
-          s.lastState={status:state.status,authenticated:state.authenticated===true,socketConnected:state.socketConnected===true,registrationError:Number(state.registrationError)||0};
+          this.recordNativeState(s,state);
         }
         if(s.stage==='wait-search'&&!s.microphone)await this.inspectMicrophone(i,s,'after-start');
-        if(['verification','blocked','attention'].includes(state?.status)){s.failureStatus=state.status;throw Error(state.detail||'Nekto requires attention before starting this voice session.');}
+        if(['verification','blocked','attention'].includes(state?.status)){s.failureStatus=state.status;throw Error(state.detail?'Nekto: '+state.detail:'Nekto requires attention before starting this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
           s.stage=state.status;
@@ -329,7 +329,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     return this.connectBoth();
   }
 
-  async applySingle(i,token){
+  async applySingle(i,token,{startCall=true}={}){
     if(i!==0&&i!==1)throw Error('Invalid audio side.');
     if(typeof token!=='string'||!token.trim())throw Error('Enter this side’s voice authToken first.');
     if(this.setup||this.ops.size)throw Error('Audio session is busy.');
@@ -347,11 +347,23 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       this.setup=false;
     }
     try{
-      await this.start(i);
-      return {ok:true,results:[{slot:i,ok:true}]};
+      if(startCall)await this.start(i);else await this.checkAuthorization(i);
+      return {ok:true,operation:startCall?'call':'authorization',results:[{slot:i,ok:true}]};
     }catch(e){
       return {ok:false,results:[{slot:i,ok:false,error:this.error(e)}]};
     }
+  }
+
+  async checkAuthorization(i){
+    if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
+    this.ops.add(i);this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare'};
+    try{const s=await this.prepare(i);s.stage='authorized-no-call';this.recordAttempt(i,s);}
+    catch(e){const s=this.slots[i];if(s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}throw Error(this.error(e));}
+    finally{this.ops.delete(i);}
+  }
+
+  recordNativeState(s,state){
+    s.lastState={status:state.status,authenticated:state.authenticated===true,socketConnected:state.socketConnected===true,registrationError:Number(state.registrationError)||0,restrictionSource:state.restrictionSource||null,disconnectCode:typeof state.disconnectCode==='number'?state.disconnectCode:null};
   }
 
   async connectBoth(){
@@ -387,6 +399,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           if(this.setup)return;
           if(!state||this.slots[i]!==s||this.ops.has(i))continue;
           this.recordDiagnostics(i,s,state.diagnostics);
+          this.recordNativeState(s,state);
           if(state.ended){await this.close(i);continue;}
           if(s.operationError&&!state.connected&&!['verification','blocked','attention'].includes(state.status)){
             state.status='error';
