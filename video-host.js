@@ -34,7 +34,7 @@ export class VideoHost{
    if(slot.page.isClosed?.())throw new Error('OmeTV client closed.');
    const frame=this.frame(slot);
    if(frame&&!frame.isDetached?.()){
-    try{const state=await frame.evaluate(()=>window.__videoHost?.status());if(state?.mediaReady)return {frame,state};}
+    try{const state=await frame.evaluate(()=>{const state=window.__videoHost?.status();if(state?.verification)return state;if(document.readyState==='loading'||!document.getElementById('local-video')||!document.getElementById('chat-text'))return null;return state;});if(state?.mediaReady)return {frame,state};}
     catch(e){if(!/detached|context.*destroyed|cannot find context|context.*not found/i.test(e.message))throw e;}
    }
    await new Promise(r=>setTimeout(r,100));

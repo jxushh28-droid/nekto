@@ -29,6 +29,7 @@ test('real Chromium follows replaced OmeTV fixture iframe after each session app
  try{
   await host.sessionsLoaded;host.sessions[0]={token:'fixture-token',SnDataStr:'fixture-signed-data',SnHmac:'fixture-signature'};
   await host.start(0);
+  await host.slots[0].page.waitForFunction(()=>window.fixtureStarted===1,{},{timeout:5000});
   const result=await host.slots[0].page.evaluate(()=>({applications:window.fixtureApplies,starts:window.fixtureStarted}));
   assert.deepEqual(result,{applications:2,starts:1});
  }finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
