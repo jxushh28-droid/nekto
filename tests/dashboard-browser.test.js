@@ -19,6 +19,33 @@ test('audio token exists before the first page script and settings survive reloa
 for(const mode of ['text','audio'])test(mode+' tokens remain visible after failed Apply and restore after reload',async()=>{
  const browser=await chromium.launch({headless:true});try{const context=await browser.newContext();let saved=['a'.repeat(64),'b'.repeat(64)];const status=mode==='audio'?{enabled:false,requested:false,setup:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:i?0:70,db:i?-60:-18}))}:{enabled:true,tokenSetup:false,slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,opening:false,epoch:null,messages:[]}))};
  await context.route(base+'/**',async route=>{const url=new URL(route.request().url());let body,type='application/json';if(url.pathname.startsWith('/api/')){if(url.pathname.endsWith('/tokens')){if(route.request().method()==='POST'){saved=JSON.parse(route.request().postData()).tokens;body=JSON.stringify({ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'},{slot:1,ok:false,error:'Fixture verification required'}]});}else body=JSON.stringify({tokens:saved});}else body=JSON.stringify(status);}else{const path=url.pathname==='/'?'index.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}await route.fulfill({body,contentType:type});});
- const page=await context.newPage();await page.goto(base+(mode==='audio'?'/audio':'/'));await page.waitForFunction(()=>document.querySelector('#tokenA').value.length===64);assert.equal(await page.locator('#tokenA').inputValue(),saved[0]);const replacement=['c'.repeat(64),'d'.repeat(64)];await page.locator('#tokenA').fill(replacement[0]);await page.locator('#tokenB').fill(replacement[1]);await page.locator('#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));assert.equal(await page.locator('#tokenA').inputValue(),replacement[0]);assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value.startsWith('cccc'));assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);if(mode==='audio'){const meter=page.getByRole('meter',{name:'Уровень звука A'});assert.equal(await meter.getAttribute('aria-valuenow'),'70');assert.equal(await page.locator('#card0 .meterValue').textContent(),'-18 dBFS');assert.equal(await page.getByRole('meter',{name:'Уровень звука B'}).getAttribute('aria-valuenow'),'0');}
+ const page=await context.newPage();await page.goto(base+(mode==='audio'?'/audio':'/'));await page.waitForFunction(()=>document.querySelector('#tokenA').value.length===64);assert.equal(await page.locator('#tokenA').inputValue(),saved[0]);const replacement=['c'.repeat(64),'d'.repeat(64)];await page.locator('#tokenA').fill(replacement[0]);await page.locator('#tokenB').fill(replacement[1]);await page.locator(mode==='audio'?'#applyBoth':'#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));assert.equal(await page.locator('#tokenA').inputValue(),replacement[0]);assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value.startsWith('cccc'));assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);if(mode==='audio'){const meter=page.getByRole('meter',{name:'Уровень звука A'});assert.equal(await meter.getAttribute('aria-valuenow'),'70');assert.equal(await page.locator('#card0 .meterValue').textContent(),'-18 dBFS');assert.equal(await page.getByRole('meter',{name:'Уровень звука B'}).getAttribute('aria-valuenow'),'0');}
+ }finally{await browser.close();}
+});
+
+test('single-side audio test accepts one token, never submits B, and retains A after failure and reload',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();let saved=[null,null];const submissions=[];
+  const status={enabled:false,requested:false,setup:false,configured:[false,false],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:0,db:-60}))};
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.startsWith('/api/')){
+    if(route.request().method()==='POST'){
+     submissions.push({path:url.pathname,data:JSON.parse(route.request().postData())});
+     assert.equal(url.pathname,'/api/audio/0/token');saved[0]=submissions.at(-1).data.token;
+     body=JSON.stringify({ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'}]});
+    }else body=JSON.stringify(url.pathname.endsWith('/tokens')?{tokens:saved}:status);
+   }else{
+    const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';
+   }
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>!document.querySelector('#hub').hidden);
+  await page.locator('#tokenA').fill('single-fixture-token');assert.equal(await page.locator('#tokenB').inputValue(),'');
+  await page.locator('#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));
+  assert.deepEqual(submissions,[{path:'/api/audio/0/token',data:{token:'single-fixture-token'}}]);
+  assert.equal(await page.locator('#tokenA').inputValue(),'single-fixture-token');
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value==='single-fixture-token');
+  assert.equal(await page.locator('#tokenB').inputValue(),'');assert.equal(submissions.length,1);
  }finally{await browser.close();}
 });

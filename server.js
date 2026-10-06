@@ -95,6 +95,7 @@ const server=http.createServer(async(req,res)=>{try{
   if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
+   const single=url.pathname.match(/^\/api\/audio\/([01])\/token$/);if(single)return json(res,200,await audio.applySingle(Number(single[1]),b.token));
    if(url.pathname==='/api/audio/connect'){await audio.consent(b.consent);return json(res,200,await audio.connectBoth());}
    if(url.pathname==='/api/audio/consent'){await audio.consent(b.consent);return json(res,200,{ok:true});}
    const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|close)$/);if(m){const i=Number(m[1]);if(m[2]==='start')await audio.start(i);else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}

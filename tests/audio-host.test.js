@@ -1,5 +1,24 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
+import {loadAudioTokens} from '../audio-token-config.js';
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
+test('single-token test opens only the selected side and persists an otherwise empty configuration',async()=>{
+ for(const side of [0,1]){const f=await fixture();try{
+  const starts=[];f.host.requested=true;f.host.start=async i=>starts.push(i);
+  const result=await f.host.applySingle(side,'single-fixture-token');
+  assert.deepEqual(starts,[side]);assert.equal(result.ok,true);assert.equal(result.results.length,1);
+  assert.equal(f.host.requested,false);assert.deepEqual(f.host.slots,[null,null]);
+  const saved=await loadAudioTokens(f.host.data);assert.equal(saved[side],'single-fixture-token');assert.equal(saved[1-side],null);
+ }finally{await f.done();}}
+});
+test('single-token failure retains both saved tokens without starting or retrying the other side',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['previous-A-token','retained-B-token'];const starts=[];
+  f.host.start=async i=>{starts.push(i);throw Error('Nekto requires verification for this voice session.');};
+  const result=await f.host.applySingle(0,'replacement-A-token');
+  assert.equal(result.ok,false);assert.match(result.results[0].error,/verification/);assert.deepEqual(starts,[0]);
+  assert.deepEqual(await loadAudioTokens(f.host.data),['replacement-A-token','retained-B-token']);
+ }finally{await f.done();}
+});
 test('audio routes only after consent and both sides connect; lost connection mutes',async()=>{const f=await fixture();try{await f.host.tick();assert.equal(f.host.enabled,false);await f.host.consent(true);assert.equal(f.host.enabled,true);f.states[1].connected=false;await f.host.tick();assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);}finally{await f.done();}});
 test('stranger disconnect closes that browser and disables routing',async()=>{const f=await fixture();try{await f.host.consent(true);f.states[0].ended=true;await f.host.tick();assert.equal(f.host.slots[0],null);assert.ok(f.host.slots[1]);assert.equal(f.host.requested,false);assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);}finally{await f.done();}});
 test('old capture chunks cannot leak into a replacement audio session',async()=>{const f=await fixture();const r=new EventEmitter();const writes=[];r.writeHead=()=>{};r.write=s=>writes.push(s);r.end=()=>r.emit('close');try{f.host.subscribe(0,r);const child=f.host.captures[0];child.stdout.emit('data',Buffer.alloc(2048));assert.equal(writes.filter(s=>s.startsWith('data:')).length,1);f.host.slots[0]={...f.host.slots[0],epoch:'new'};child.stdout.emit('data',Buffer.alloc(2048));assert.equal(writes.filter(s=>s.startsWith('data:')).length,1);}finally{await f.done();}});
