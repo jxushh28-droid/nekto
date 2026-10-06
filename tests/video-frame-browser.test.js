@@ -7,7 +7,7 @@ import {chromium} from 'playwright';
 import {VideoHost} from '../video-host.js';
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
  const data=await mkdtemp(join(tmpdir(),'video-frame-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
- const host=new VideoHost({data,getBrowser:async()=>({newContext:async options=>{
+ const host=new VideoHost({data,pageUrl:'https://ometv.chat/',getBrowser:async()=>({newContext:async options=>{
   const context=await browser.newContext(options);
   await context.route('https://ometv.chat/**',async route=>{
    const embed=new URL(route.request().url()).pathname==='/embed/index.html';
@@ -87,4 +87,11 @@ test('site guidance and inactive notices cannot block Start; active errors remai
   await page.evaluate(()=>document.querySelector('[data-tr="active_error"]').textContent='Connection failed.');
   assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not connect to its server.');
  }finally{await context.close();await browser.close();}
+});
+test('direct native chat applies twice and starts without an account homepage',async()=>{
+ const {mkdtemp,rm}=await import('node:fs/promises'),data=await mkdtemp(join(tmpdir(),'video-direct-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const urls=[],host=new VideoHost({data,getBrowser:async()=>({newContext:async options=>{
+  const context=await browser.newContext(options);await context.route('https://ometv.chat/**',async route=>{urls.push(new URL(route.request().url()).pathname);await route.fulfill({contentType:'text/html',body:`<video id="local-video"></video><input id="chat-text"><div class="btn btn-main"><span data-tr="start">Start</span></div><script>window.applies=0;window.starts=0;window.__videoHost={status:()=>({mediaReady:true,login:false,verification:false,connected:false})};window.addEventListener('message',e=>{if(e.origin==='https://ometv.chat'&&e.source===window&&e.data.source==='sn'&&e.data.setAuthToken==='direct-token')window.applies++;});document.querySelector('.btn').onclick=()=>window.starts++;</script>`});});return context;
+ }})});
+ try{await host.sessionsLoaded;host.sessions[0]={token:'direct-token',SnDataStr:'signed-data',SnHmac:'signed-hmac'};await host.start(0);assert.deepEqual(await host.slots[0].page.evaluate(()=>({applies:window.applies,starts:window.starts})),{applies:2,starts:1});assert.equal(urls.includes('/'),false);assert.equal(urls.includes('/embed/index.html'),true);}finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
 });

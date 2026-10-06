@@ -1,5 +1,6 @@
 (()=>{
  if(location.hostname!=='ometv.chat'&&location.hostname!=='127.0.0.1')return;
+ if(location.hostname==='ometv.chat'&&location.pathname!=='/embed/index.html')return;
  if(window.__videoHost||!navigator.mediaDevices||!window.MediaRecorder||!window.MediaSource)return;
  const NativeRTC=window.RTCPeerConnection;
  const audio=new AudioContext(),outAudio=audio.createMediaStreamDestination(),remoteAudio=audio.createMediaStreamDestination();
