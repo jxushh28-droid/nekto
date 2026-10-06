@@ -1,53 +1,23 @@
+// Matches the uploaded extension on HTTPS Nekto documents and subframes.
+// The token is supplied per context, rather than embedded in a source file.
 export function primeVoiceStorage(token) {
-  const fail = (reason) => {
-    window.__voiceTokenBootstrap = { ok: false, reason };
-  };
-
-  if (location.origin !== 'https://nekto-me.kz' ||
-      !location.pathname.startsWith('/audiochat')) {
-    return fail(`origin-mismatch:${location.origin}${location.pathname}`);
-  }
-
-  const key = 'storage_audio_v2';
-  let raw;
-  try {
-    raw = localStorage.getItem(key);
-  } catch (e) {
-    return fail(`localStorage-read:${e?.message || e}`);
-  }
-
-  let saved;
-  try {
-    saved = JSON.parse(raw || '{}');
-  } catch {
-    return fail('json-parse:invalid-json');
-  }
-
-  if (saved === null || typeof saved !== 'object' || Array.isArray(saved)) {
-    return fail('invalid-storage-shape');
-  }
-
-  if (saved.user != null && (typeof saved.user !== 'object' || Array.isArray(saved.user))) {
-    return fail('invalid-user-shape');
-  }
-
-  if (saved.user?.authToken !== token) {
-    saved.user = { ...(saved.user || {}), authToken: token };
+  if (location.origin !== 'https://nekto-me.kz') return;
+  const TOKEN = token;
+  const KEY = 'storage_audio_v2';
+  const write = () => {
     try {
-      localStorage.setItem(key, JSON.stringify(saved));
-    } catch (e) {
-      return fail(`localStorage-write:${e?.message || e}`);
-    }
-  }
-
-  let matches;
-  try {
-    matches = JSON.parse(localStorage.getItem(key))?.user?.authToken === token;
-  } catch {
-    return fail('verify-read:failed');
-  }
-
-  window.__voiceTokenBootstrap = matches
-    ? { ok: true, reason: 'saved-before-startup' }
-    : { ok: false, reason: 'storage-mismatch' };
+      const saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {};
+      if (saved?.user?.authToken === TOKEN) return true;
+      saved.user = saved.user || {};
+      saved.user.authToken = TOKEN;
+      localStorage.setItem(KEY, JSON.stringify(saved));
+      return true;
+    } catch { return false; }
+  };
+  const apply = () => {
+    const ok = write();
+    window.__voiceTokenBootstrap = { ok, reason: ok ? 'extension-document-start' : 'extension-storage-write-failed' };
+    return ok;
+  };
+  if (!apply()) document.addEventListener('readystatechange', apply, { once: true });
 }

@@ -1,6 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
 import {loadAudioTokens} from '../audio-token-config.js';
 import {AudioGraph} from '../audio-graph.js';
+import {primeVoiceStorage} from '../voice-bootstrap.js';
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
@@ -74,9 +75,9 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
   const page=new EventEmitter();page.goto=async()=>{};page.waitForFunction=async()=>{};
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
-  let imported;
-  const context={storageState:async()=>imported,grantPermissions:async()=>{},addInitScript:async input=>{assert.equal(typeof input.content,'string');},newPage:async()=>page};
-  f.host.launch=async()=>({newContext:async options=>{imported=options.storageState;return context;},close:async()=>{}});
+  const initCalls=[];
+  const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(typeof initCalls[1].input.content,'string');return page;}};
+  f.host.launch=async()=>({newContext:async options=>{assert.equal('storageState' in options,false);return context;},close:async()=>{}});
   console.log=value=>logs.push(String(value));
   await f.host.prepare(0);
   const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/?token=private-query-value';

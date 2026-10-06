@@ -5,7 +5,7 @@ import {AudioGraph} from './audio-graph.js';
 import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
-import {voiceStorageState,voiceStorageMatches} from './voice-storage-state.js';
+import {primeVoiceStorage} from './voice-bootstrap.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -71,15 +71,14 @@ export class AudioHost{
       try{
       const context=await browser.newContext({
         viewport:{width:420,height:760},
-        locale:'ru-RU',
-        storageState:voiceStorageState(this.tokens[i])
+        locale:'ru-RU'
       });
 
-      const bootstrap={ok:voiceStorageMatches(await context.storageState(),this.tokens[i]),reason:'context-storage-before-navigation'};
-      if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: context-storage-mismatch');
+      const bootstrap={ok:false,reason:'await-document-start'};
 
       await context.grantPermissions(['microphone'],{origin:'https://nekto-me.kz'});
 
+      await context.addInitScript(primeVoiceStorage,this.tokens[i]);
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
@@ -138,7 +137,7 @@ page.on("websocket", ws => {
       s={browser,context,page,bootstrap,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
       this.slots[i]=s;
       this.recordAttempt(i,s);
-      console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',attemptId:s.epoch,...bootstrap}));
+      console.log(JSON.stringify({event:'audio_token_init_registered',slot:i?'B':'A',attemptId:s.epoch}));
 
       page.on('dialog',d=>d.dismiss().catch(()=>{}));
       page.on('popup',p=>p.close().catch(()=>{}));
@@ -152,6 +151,9 @@ page.on("websocket", ws => {
       });
 
       await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});
+      s.bootstrap=await page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'extension-init-not-run'});
+      this.recordAttempt(i,s);
+      console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',attemptId:s.epoch,...s.bootstrap}));
       }catch(e){
         if(s)this.recordAttempt(i,s);
         if(this.slots[i]===s)this.slots[i]=null;
@@ -162,7 +164,7 @@ page.on("websocket", ws => {
 
     // Only document-start seeding is valid. A post-navigation write is too
     // late to establish which token the site's client loaded at startup.
-    const bootstrap=s.bootstrap||{ok:false,reason:'context-storage-not-verified'};
+    const bootstrap=s.bootstrap||{ok:false,reason:'extension-init-not-verified'};
 
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
