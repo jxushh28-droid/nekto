@@ -73,3 +73,21 @@ test('single-side audio test accepts one token, never submits B, and retains A a
   assert.equal(await page.locator('#tokenB').inputValue(),'');assert.equal(submissions.length,1);
  }finally{await browser.close();}
 });
+
+test('audio panel shows the native screen and keeps the final failure image visible',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwWhAPAAI5ATKtB7p3AAAAAElFTkSuQmCC','base64');let stopped=false,requests=0;
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.endsWith('/screen')){requests++;return route.fulfill({body:image,contentType:'image/png',headers:{'X-Screen-Time':String(Date.now())}});}
+   if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:!stopped,closable:true,stopped,screenAvailable:true,attemptId:'fixture-A',status:stopped?'verification':'ready',busy:false,connected:false,level:0,db:-60,error:''},{open:false,status:'closed',busy:false,connected:false,level:0,db:-60}]});
+   else {const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>document.querySelector('#card0 .screenImage').naturalWidth===1);
+  assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.equal(await page.locator('#card1 .screenImage').isVisible(),false);
+  stopped=true;await page.waitForFunction(()=>document.querySelector('#card0 .screenHint').textContent.includes('Последний экран'));
+  assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.ok(requests>=2);
+ }finally{await browser.close();}
+});

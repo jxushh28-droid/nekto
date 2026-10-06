@@ -151,3 +151,23 @@ test('failed audio diagnostic cannot prevent browser teardown or invent a missin
  let closed=0;f.host.slots[0].browser.close=async()=>closed++;f.host.graph.inputStatus=async()=>{throw Error('private daemon detail');};
  await f.host.stopFailed(0,f.host.slots[0]);assert.equal(closed,1);assert.deepEqual(f.host.status().slots[0].microphone,{phase:'before-stop',available:false});
  }finally{await f.done();}});
+
+test('native screen is cached per side and retained before a failed browser closes',async()=>{const f=await fixture();try{
+ const s=f.host.slots[0],events=[];let shots=0;s.page.screenshot=async()=>{events.push('screen');shots++;return Buffer.from('private-image-'+shots);};s.browser.close=async()=>events.push('close');
+ const first=await f.host.screen(0);assert.equal(first.bytes.toString(),'private-image-1');assert.equal((await f.host.screen(0)).bytes.toString(),'private-image-1');assert.equal(shots,1);assert.equal(await f.host.screen(1),null);
+ await f.host.stopFailed(0,s);assert.deepEqual(events,['screen','screen','close']);assert.equal((await f.host.screen(0)).bytes.toString(),'private-image-2');assert.equal(f.host.status().slots[0].screenAvailable,true);assert.equal(JSON.stringify(f.host.status()).includes('private-image'),false);
+ await f.host.close(0);assert.equal(await f.host.screen(0),null);
+ }finally{await f.done();}});
+test('an old screenshot cannot leak into a replacement session',async()=>{const f=await fixture();try{
+ let resolve;f.host.slots[0].page.screenshot=()=>new Promise(r=>resolve=r);const pending=f.host.screen(0);
+ f.host.slots[0]={...f.host.slots[0],page:{screenshot:async()=>Buffer.from('new-image')},screenPromise:null,epoch:'replacement'};resolve(Buffer.from('old-private-image'));
+ assert.equal(await pending,null);assert.equal((await f.host.screen(0)).bytes.toString(),'new-image');
+ }finally{await f.done();}});
+test('concurrent screen reads share one screenshot operation',async()=>{const f=await fixture();try{
+ let resolve,calls=0;f.host.slots[0].page.screenshot=()=>{calls++;return new Promise(r=>resolve=r);};const one=f.host.screen(0),two=f.host.screen(0);resolve(Buffer.from('fixture-image'));
+ assert.equal((await one).bytes.toString(),'fixture-image');assert.equal((await two).bytes.toString(),'fixture-image');assert.equal(calls,1);
+ }finally{await f.done();}});
+test('screenshot failure cannot prevent browser cleanup',async()=>{const f=await fixture();try{
+ let closed=0;f.host.slots[0].page.screenshot=async()=>{throw Error('private renderer detail');};f.host.slots[0].browser.close=async()=>closed++;
+ await f.host.stopFailed(0,f.host.slots[0]);assert.equal(closed,1);assert.equal(await f.host.screen(0),null);
+ }finally{await f.done();}});

@@ -38,6 +38,7 @@ export class AudioHost{
     this.polling=false;
     this.ops=new Set();
     this.attempts=[null,null];
+    this.screens=[null,null];
     this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
     this.timer=setInterval(()=>void this.tick(),500);
   }
@@ -136,6 +137,7 @@ page.on("websocket", ws => {
 });
       s={browser,context,page,bootstrap,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
       this.slots[i]=s;
+      this.screens[i]=null;
       this.recordAttempt(i,s);
       console.log(JSON.stringify({event:'audio_token_init_registered',slot:i?'B':'A',attemptId:s.epoch}));
 
@@ -439,6 +441,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         authorization:s?.authorization||null,
         diagnostics:s?.diagnostics||[],
         microphone:s?.microphone||null,
+        screenAvailable:!!s&&this.screens[i]?.epoch===s.epoch,
+        screenAt:s&&this.screens[i]?.epoch===s.epoch?this.screens[i].at:null,
         level:s?.connected&&Date.now()-(s.levelAt||0)<500?s?.meter?.level||0:0,
         db:s?.connected&&Date.now()-(s.levelAt||0)<500?s?.meter?.db??-60:-60
       }))
@@ -522,6 +526,28 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     this.recordAttempt(i,s);
   }
 
+  async captureScreen(i,s,final=false){
+    if(this.slots[i]!==s||typeof s.page?.screenshot!=='function')return null;
+    if(s.screenPromise){await s.screenPromise;if(!final)return this.screens[i]?.epoch===s.epoch?this.screens[i]:null;}
+    if(this.slots[i]!==s)return null;
+    if(s.stopped&&!final)return this.screens[i]?.epoch===s.epoch?this.screens[i]:null;
+    s.screenPromise=(async()=>{
+      try{
+        const bytes=await s.page.screenshot({type:'jpeg',quality:65,timeout:2000});
+        if(this.slots[i]!==s)return null;
+        return this.screens[i]={epoch:s.epoch,bytes,at:Date.now()};
+      }catch{return this.screens[i]?.epoch===s.epoch?this.screens[i]:null;}
+    })();
+    try{return await s.screenPromise;}finally{s.screenPromise=null;}
+  }
+
+  async screen(i){
+    const s=this.slots[i];if(!s)return null;
+    const cached=this.screens[i]?.epoch===s.epoch?this.screens[i]:null;
+    if(s.stopped||cached&&Date.now()-cached.at<1500)return cached;
+    return this.captureScreen(i,s);
+  }
+
   async stopFailed(i,s){
     if(this.slots[i]!==s||s.stopped)return;
     s.stopped=true;s.connected=false;this.requested=false;this.enabled=false;
@@ -532,6 +558,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     console.warn(JSON.stringify({event:'audio_session_stopped',slot:i?'B':'A',attemptId:s.epoch,stage:s.stage,status:s.status}));
     if(this.graph.process)await this.graph.routing(false).catch(()=>{});
     await this.inspectMicrophone(i,s,'before-stop');
+    await this.captureScreen(i,s,true);
     await s.browser.close().catch(()=>{});
   }
 
@@ -541,6 +568,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     if(this.graph.process)await this.graph.routing(false).catch(()=>{});
     const s=this.slots[i];
     this.slots[i]=null;
+    this.screens[i]=null;
     this.stopCapture(i);
     for(const r of this.clients[i]){
       r.write('event: closed\ndata: {}\n\n');
