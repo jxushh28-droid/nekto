@@ -28,7 +28,7 @@
   status(){
    const visible=el=>{if(el.closest('[hidden],[aria-hidden="true"],[inert]'))return false;if(el.checkVisibility&&!el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;const rect=el.getBoundingClientRect();if(!rect.width||!rect.height||rect.bottom<=0||rect.right<=0||rect.top>=innerHeight||rect.left>=innerWidth)return false;for(let node=el;node instanceof Element;node=node.parentElement){const style=getComputedStyle(node);if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return false;}return true;};
    const labels=[...document.querySelectorAll('[data-tr]')].filter(visible),texts=labels.map(el=>(el.innerText||'').replace(/\s+/g,' ').trim());
-   const restricted=texts.some(text=>/^(?:you (?:are|have been) banned|your (?:account|access|session|ip(?: address)?) (?:is|has been) (?:banned|blocked|restricted)|access (?:is |has been )?denied|ban expires(?: in|:))/i.test(text));
+   const restricted=labels.some(el=>el.dataset.tr==='youre-banned')||texts.some(text=>/^(?:you (?:are|have been) banned|your (?:account|access|session|ip(?: address)?) (?:is|has been) (?:banned|blocked|restricted)|access (?:is |has been )?denied|ban expires(?: in|:))/i.test(text));
    const cameraError=texts.some(text=>/^(?:camera (?:was |is )?(?:not found|denied|unavailable)|(?:cannot|could not|unable to) access (?:your |the )?camera|camera access (?:was |is )?denied)/i.test(text));
    const networkError=texts.some(text=>/^(?:connection failed|server (?:is )?unavailable|network error)(?:[.!:]|$)/i.test(text));
    const duplicateSession=/you have opened the application in another window or in another browser/i.test(document.body?.innerText||'');

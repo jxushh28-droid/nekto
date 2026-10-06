@@ -86,6 +86,7 @@ test('site guidance and inactive notices cannot block Start; active errors remai
   assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not access the hosted camera.');
   await page.evaluate(()=>document.querySelector('[data-tr="active_error"]').textContent='Connection failed.');
   assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not connect to its server.');
+  await page.evaluate(()=>{document.body.innerHTML='<div data-tr="youre-banned">Вы заблокированы</div>';});assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV has restricted this session.');
  }finally{await context.close();await browser.close();}
 });
 test('delayed normal-page authorization completes without a second apply before Start',async()=>{
