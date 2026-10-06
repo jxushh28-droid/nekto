@@ -21,7 +21,7 @@ test('Yap uses isolated main pages and native Start with no credential injection
  const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
   assert.equal(options.storageState,undefined);
   const context=await browser.newContext(options);contexts.push(context);
-  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><button id="entry">Start Random Video Chat</button><script>
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><button id="entry">Start Random Video Chat</button><script>
    window.starts=0;document.getElementById('entry').onclick=()=>{document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;};};
   </script>`}));
   return context;
