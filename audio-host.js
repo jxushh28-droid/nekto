@@ -157,8 +157,14 @@ page.on("websocket", ws => {
       this.recordAttempt(i,s);
       console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',attemptId:s.epoch,...s.bootstrap}));
       }catch(e){
-        if(s)this.recordAttempt(i,s);
-        if(this.slots[i]===s)this.slots[i]=null;
+        if(s&&this.slots[i]===s){
+          const timeout=e?.name==='TimeoutError';
+          s.error=s.crashed?s.error:timeout?'Nekto audio page did not finish loading within 45 seconds.':'Nekto audio page could not load.';
+          s.status='error';
+          this.recordAttempt(i,s);
+          await this.stopFailed(i,s);
+          throw Error(s.error);
+        }
         await browser.close().catch(()=>{});
         throw e;
       }
@@ -171,7 +177,8 @@ page.on("websocket", ws => {
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
     s.stage='await-native-client';
-    await s.page.waitForFunction(voiceReady,null,{timeout:20000});
+    try{await s.page.waitForFunction(voiceReady,null,{timeout:20000});}
+    catch(e){if(e?.name==='TimeoutError')throw Error('Nekto audio client did not become ready within 20 seconds. The call has not been started.');throw e;}
     s.stage='confirm-native-session';
     const registrationDiagnostic = await s.page.evaluate(() => {
   const stores = [...document.querySelectorAll("*")]

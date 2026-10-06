@@ -48,6 +48,26 @@ test('a delayed status from an old session cannot close its replacement',async()
   assert.equal(f.host.slots[0],replacement);assert.equal(closed,0);
  }finally{await f.done();}
 });
+test('navigation timeout preserves the failed stage and native screen without retrying',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['fixture-token',null];f.host.slots[0]=null;
+  f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});let visits=0,closed=0;
+  const page=new EventEmitter();page.goto=async()=>{visits++;throw Object.assign(Error('private navigation details'),{name:'TimeoutError'});};page.screenshot=async()=>Buffer.from('fixture-screen');
+  const context={grantPermissions:async()=>{},addInitScript:async()=>{},newPage:async()=>page};
+  f.host.launch=async()=>({newContext:async()=>context,close:async()=>closed++});
+  await assert.rejects(f.host.start(0),/page did not finish loading within 45 seconds/);
+  assert.equal(visits,1);assert.equal(closed,1);assert.equal(f.host.slots[0].stopped,true);assert.equal(f.host.status().slots[0].stage,'navigate');assert.equal(f.host.status().slots[0].screenAvailable,true);
+  assert.equal((await f.host.screen(0)).bytes.toString(),'fixture-screen');
+ }finally{await f.done();}
+});
+test('native client readiness timeout explains that Start was never reached',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['fixture-token',null];
+  f.host.slots[0].page.waitForFunction=async()=>{throw Object.assign(Error('fixture timeout'),{name:'TimeoutError'});};
+  await assert.rejects(f.host.start(0),/client did not become ready within 20 seconds.*call has not been started/);
+  assert.equal(f.host.slots[0].stopped,true);assert.equal(f.host.status().slots[0].stage,'await-native-client');
+ }finally{await f.done();}
+});
 test('routing retries both mute commands after a partially failed unmute',async()=>{
  const graph=new AudioGraph();graph.inputs=[10,20];graph.routeKey=false;const commands=[];
  graph.pactl=async(...args)=>{commands.push(args);if(args[1]==='20'&&args[2]==='0')throw Error('fixture route failure');};
