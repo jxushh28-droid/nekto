@@ -1,5 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
 import {loadAudioTokens} from '../audio-token-config.js';
+import {AudioGraph} from '../audio-graph.js';
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
@@ -14,6 +15,55 @@ test('preparation diagnostics use the stored page and an accessible redactor',as
   };
   const slot=await f.host.prepare(0);
   assert.equal(slot.page,page);assert.equal(slot.prepared,true);assert.equal(calls,4);
+ }finally{await f.done();}
+});
+test('failed document-start seeding never rewrites the token after the page starts',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['bootstrap-fixture-token',null];let fallbackWrites=0;
+  f.host.slots[0].page.evaluate=async fn=>{
+   if(fn.toString().includes('localStorage.setItem')){fallbackWrites++;return;}
+   return {ok:false,reason:'bootstrap-not-run'};
+  };
+  await assert.rejects(f.host.prepare(0),/before startup/);
+  assert.equal(fallbackWrites,0);
+ }finally{await f.done();}
+});
+test('a browser is closed when context setup fails before its slot is assigned',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['launch-fixture-token',null];f.host.slots[0]=null;
+  f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});let closed=0;
+  f.host.launch=async()=>({newContext:async()=>{throw Error('fixture setup failure');},close:async()=>closed++});
+  await assert.rejects(f.host.prepare(0),/fixture setup failure/);
+  assert.equal(closed,1);assert.equal(f.host.slots[0],null);
+ }finally{await f.done();}
+});
+test('a delayed status from an old session cannot close its replacement',async()=>{
+ const f=await fixture();try{
+  let resolve;f.host.slots[0].page.evaluate=()=>new Promise(r=>resolve=r);
+  const polling=f.host.tick();let closed=0;
+  const replacement={...f.host.slots[0],page:{evaluate:async()=>({status:'ready',connected:false})},browser:{close:async()=>closed++},connected:false,epoch:'replacement'};
+  f.host.slots[0]=replacement;resolve({status:'ended',ended:true,connected:false});await polling;
+  assert.equal(f.host.slots[0],replacement);assert.equal(closed,0);
+ }finally{await f.done();}
+});
+test('routing retries both mute commands after a partially failed unmute',async()=>{
+ const graph=new AudioGraph();graph.inputs=[10,20];graph.routeKey=false;const commands=[];
+ graph.pactl=async(...args)=>{commands.push(args);if(args[1]==='20'&&args[2]==='0')throw Error('fixture route failure');};
+ await assert.rejects(graph.routing(true),/fixture route failure/);
+ await graph.routing(false);
+ assert.deepEqual(commands.slice(-2),[['set-sink-input-mute','10','1'],['set-sink-input-mute','20','1']]);
+});
+test('muting still attempts the second direction when the first mute fails',async()=>{
+ const graph=new AudioGraph();graph.inputs=[10,20];graph.routeKey=true;const commands=[];
+ graph.pactl=async(...args)=>{commands.push(args);if(args[1]==='10')throw Error('fixture mute failure');};
+ await assert.rejects(graph.routing(false),/fixture mute failure/);assert.equal(commands.length,2);assert.equal(graph.routeKey,null);
+});
+test('Start waits for current native authorization instead of trusting a previously prepared slot',async()=>{
+ const f=await fixture();try{
+  let checks=0,clicks=0;f.host.prepare=async()=>f.host.slots[0];
+  f.host.state=async()=>++checks===1?{status:'ready',authenticated:false,socketConnected:false}:checks===2?{status:'ready',authenticated:true,socketConnected:true}:{status:'searching',connected:false};
+  f.host.slots[0].page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>{assert.equal(checks,2);clicks++;}});
+  await f.host.start(0);assert.equal(clicks,1);assert.equal(checks,3);
  }finally{await f.done();}
 });
 test('persistent WebSocket logging records metadata without payloads or raw errors',async()=>{

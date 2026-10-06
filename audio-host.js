@@ -66,6 +66,7 @@ export class AudioHost{
         env:this.graph.browserEnv(i)
       });
 
+      try{
       const context=await browser.newContext({
         viewport:{width:420,height:760},
         locale:'ru-RU',
@@ -138,33 +139,21 @@ page.on("websocket", ws => {
         s.connected=false;
         s.status='error';
         s.error='Audio browser ran out of memory. Disconnect unused modes first.';
-        void this.graph.routing(false);
+        void this.graph.routing(false).catch(()=>{});
         this.enabled=false;
       });
 
       await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});
+      }catch(e){
+        if(this.slots[i]===s)this.slots[i]=null;
+        await browser.close().catch(()=>{});
+        throw e;
+      }
     }
 
-    let bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});
-
-    // Fallback: if the init script was blocked or didn't run, write the token
-    // directly via evaluate before the app finishes hydrating.
-    if(!bootstrap.ok){
-      await s.page.evaluate(({token,key})=>{
-        try{
-          const saved=JSON.parse(localStorage.getItem(key)||'{}')||{};
-          if(typeof saved!=='object'||Array.isArray(saved))return;
-          saved.user=(saved.user&&typeof saved.user==='object'&&!Array.isArray(saved.user))?saved.user:{};
-          saved.user.authToken=token;
-          localStorage.setItem(key,JSON.stringify(saved));
-          const matches=JSON.parse(localStorage.getItem(key))?.user?.authToken===token;
-          window.__voiceTokenBootstrap={ok:matches,reason:matches?'evaluate-fallback':'fallback-mismatch'};
-        }catch{
-          window.__voiceTokenBootstrap={ok:false,reason:'evaluate-fallback-failed'};
-        }
-      },{token:this.tokens[i],key:'storage_audio_v2'});
-      bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});
-    }
+    // Only document-start seeding is valid. A post-navigation write is too
+    // late to establish which token the site's client loaded at startup.
+    const bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});
 
     console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',...bootstrap}));
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
@@ -260,11 +249,13 @@ console.log(
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
           return;
         }
-        if(!clicked&&await s.page.locator('#searchCompanyBtn').isVisible()){
+        if(!clicked&&state?.authenticated&&state?.socketConnected&&await s.page.locator('#searchCompanyBtn').isVisible()){
           const cookies=s.page.locator('#acceptCookies');
           if(await cookies.isVisible()&&await cookies.isEnabled())await cookies.click({timeout:800}).catch(()=>{});
+          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',phase:'before-click',authenticated:state.authenticated,socketConnected:state.socketConnected,registrationError:state.registrationError||0}));
           await s.page.locator('#searchCompanyBtn').click({timeout:5000});
           clicked=true;
+          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',phase:'clicked'}));
         }
         await new Promise(r=>setTimeout(r,500));
       }
@@ -349,11 +340,10 @@ console.log(
         if(!s||this.ops.has(i)||s.crashed)continue;
         try{
           const state=await this.state(s);
-          if(!state)continue;
+          if(this.setup)return;
+          if(!state||this.slots[i]!==s||this.ops.has(i))continue;
           this.recordDiagnostics(i,s,state.diagnostics);
           if(state.ended){await this.close(i);continue;}
-          if(state.status==='verification'&&!s.authorization?.captcha&&!s.authorization?.hcaptcha&&s.authorization?.authenticated)
-            state.detail='Nekto потребовал проверку после авторизации. Токен был применён; повторное применение не выполняется.';
           if(s.operationError&&!state.connected&&!['verification','blocked'].includes(state.status)){
             state.status='error';
             state.detail=s.operationError;
@@ -362,6 +352,7 @@ console.log(
             console.log(JSON.stringify({event:'audio_session_status',slot:i?'B':'A',status:state.status,authenticated:state.authenticated,socketConnected:state.socketConnected}));
           Object.assign(s,{status:state.status,connected:state.connected,error:state.detail||''});
         }catch(e){
+          if(this.slots[i]!==s||this.setup||this.ops.has(i))continue;
           s.status='error';
           s.connected=false;
           s.error=this.error(e);
@@ -381,6 +372,7 @@ console.log(
     }catch{
       this.enabled=false;
       this.requested=false;
+      if(this.graph.process)await this.graph.routing(false).catch(()=>{});
     }finally{
       this.polling=false;
     }

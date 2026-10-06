@@ -16,7 +16,7 @@ export class AudioGraph{
   const inputs=JSON.parse(await this.pactl('-f','json','list','sink-inputs'));this.inputs=this.loops.map(id=>inputs.find(input=>Number(input.owner_module)===id)?.index);if(this.inputs.some(i=>i==null))throw Error('Audio routing unavailable');this.routeKey=null;await this.routing(false);return this;
  }
  browserEnv(i){const l=i?'B':'A';return {...this.env,PULSE_SINK:'nekto_output_'+l,PULSE_SOURCE:'nekto_mic_'+l};}
- routing(enabled){this.chain=this.chain.catch(()=>{}).then(async()=>{if(this.routeKey===enabled)return;for(const id of this.inputs)await this.pactl('set-sink-input-mute',String(id),enabled?'0':'1');this.routeKey=enabled;});return this.chain;}
+ routing(enabled){this.chain=this.chain.catch(()=>{}).then(async()=>{if(this.routeKey===enabled)return;this.routeKey=null;let failure;for(const id of this.inputs){try{await this.pactl('set-sink-input-mute',String(id),enabled?'0':'1');}catch(e){failure=e;if(enabled)throw e;}}if(failure)throw failure;this.routeKey=enabled;});return this.chain;}
  capture(i){return spawn('ffmpeg',['-nostdin','-hide_banner','-loglevel','error','-f','pulse','-i','nekto_output_'+(i?'B':'A')+'.monitor','-ac','1','-ar','24000','-f','s16le','pipe:1'],{env:this.env,stdio:['ignore','pipe','ignore']});}
  async close(){this.process?.kill('SIGTERM');this.process=null;this.ready=null;this.inputs=[];this.loops=[];this.routeKey=null;if(this.directory)await rm(this.directory,{recursive:true,force:true}).catch(()=>{});this.directory=null;}
 }
