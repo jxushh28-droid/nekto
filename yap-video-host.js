@@ -42,27 +42,47 @@ export class YapVideoHost extends VideoHost{
  async prepareSession(i){await this.open(i);await this.currentClient(this.slots[i]);}
  async start(i){
   if(this.slots[i]?.crashed)await this.close(i);
-  await this.open(i);const slot=this.slots[i];slot.busy=true;
+  await this.open(i);const slot=this.slots[i];slot.busy=true;slot.startFailed=false;let stage='wait-media-runtime';
   try{
    let {state}=await this.currentClient(slot);
    if(state.verification)throw Error('Yap requires verification.');
    if(state.nativeError)throw Error(state.nativeError);
    if(state.connected||state.searching)return;
-   const landing=slot.page.getByRole('button',{name:'Start Random Video Chat',exact:true});
-   if(await landing.isVisible())await landing.click({timeout:5000});
-   // Only the normal Start button; never Adult, Next, sign-in or a challenge.
-   const start=slot.page.getByRole('button',{name:/^(?:▶\s*)?START$/i}).filter({visible:true}).first();
-   await start.waitFor({state:'visible',timeout:20000});
+   stage='wait-entry';
+   // The media adapter can be ready before React mounts/hydrates Yap's UI.
+   // Wait for a native handler, then click the entry only once.
+   await slot.page.waitForFunction(()=>{
+    const state=window.__videoHost?.status();
+    if(state?.verification||state?.nativeError)return true;
+    return [...document.querySelectorAll('button')].some(button=>{
+     const text=(button.innerText||'').replace(/\s+/g,' ').trim();
+     if(!/^(?:Start Random Video Chat|(?:▶\s*)?START)$/i.test(text)||button.disabled||!button.getClientRects().length)return false;
+     const key=Object.keys(button).find(k=>k.startsWith('__reactProps$'));
+     return typeof button.onclick==='function'||typeof button[key]?.onClick==='function';
+    });
+   },null,{timeout:30000});
    ({state}=await this.currentClient(slot));
    if(state.verification)throw Error('Yap requires verification.');
    if(state.nativeError)throw Error(state.nativeError);
+   const landing=slot.page.getByRole('button',{name:'Start Random Video Chat',exact:true});
+   stage='enter-video-client';
+   if(await landing.isVisible())await landing.click({timeout:5000});
+   // Only the normal Start button; never Adult, Next, sign-in or a challenge.
+   const start=slot.page.getByRole('button',{name:/^(?:▶\s*)?START$/i}).filter({visible:true}).first();
+   stage='wait-native-start';
+   await start.waitFor({state:'visible',timeout:30000});
+   ({state}=await this.currentClient(slot));
+   if(state.verification)throw Error('Yap requires verification.');
+   if(state.nativeError)throw Error(state.nativeError);
+   stage='click-native-start';
    await start.click({timeout:5000});
    slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';
-  }catch(e){slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:'Yap video could not start. Its native Start control was unavailable.';slot.status=/verification/.test(slot.error)?'verification':'error';throw Error(slot.error);}
+  }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
   finally{slot.busy=false;}
  }
  async tick(){await super.tick();for(const s of this.slots)if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';}
  status(){return {...super.status(),provider:'yap',requiresSession:false};}
+ async inspect(){const result=await super.inspect();for(let i=0;i<2;i++)result.slots[i].failureStage=this.slots[i]?.failureStage||null;return result;}
  async send(i,text){
   if(typeof text!=='string'||!text.trim()||text.length>4000)throw Error('Write a message of 1–4000 characters.');
   const slot=this.slots[i];if(!slot?.connected)throw Error('Connect this participant first.');

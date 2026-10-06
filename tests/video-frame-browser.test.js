@@ -21,15 +21,15 @@ test('Yap uses isolated main pages and native Start with no credential injection
  const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
   assert.equal(options.storageState,undefined);
   const context=await browser.newContext(options);contexts.push(context);
-  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><button id="entry">Start Random Video Chat</button><script>
-   window.starts=0;document.getElementById('entry').onclick=()=>{document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;};};
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><div>Loading...</div><script>
+   window.starts=0;window.entries=0;setTimeout(()=>{document.body.innerHTML='<button id="entry">Start Random Video Chat</button>';setTimeout(()=>{document.getElementById('entry').onclick=()=>{window.entries++;document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;};};},200);},200);
   </script>`}));
   return context;
  }})});
  try{
   await host.start(0);await host.start(1);
   assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
-  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(host.frame(slot),slot.page.mainFrame());assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
+  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(host.frame(slot),slot.page.mainFrame());assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
  }finally{await host.shutdown();await browser.close();}
 });
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
