@@ -8,6 +8,7 @@ import {Transcript} from './transcript.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
 import {loadTokens,saveTokens} from './token-config.js';
+import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
@@ -34,6 +35,7 @@ async function open(i){
   await context.storageState({path:data+'/slot-'+i+'.json'});}catch(e){slots[i]=null;await context.close().catch(()=>{});operationError(i,e);throw e;}finally{slot.opening=false;}
 }
 function operationError(i,e){const error=safeError(e);const changed=relay.members[i].error!==error;relay.members[i].error=error;if(changed)console.warn(JSON.stringify({event:'session_operation_failed',slot:labels[i],error}));return error;}
+async function closeSlot(i,expected=slots[i]){const previous=locks[i];locks[i]=true;try{return await closeSession({slots,index:i,expected,relay,transcript:transcripts[i],tokenStatus,path:data+'/slot-'+i+'.json'});}finally{locks[i]=previous;}}
 async function authorize(i,{force=false}={}){
  const s=slots[i],token=configuredTokens[i];if(!token||s.preparedToken===token)return;
  const reload=false;s.bootstrapToken=token;s.preparedToken=null;s.status='loading';tokenStatus[i]=false;
@@ -50,6 +52,7 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
  try{
   if(!new URL(s.page.url()).hostname.match(/(^|\.)nekto-me\.kz$/)){relay.update(i,{connected:false,epoch:null});return;}
   const state=await s.page.evaluate(()=>window.__textHost?.poll());if(!state)return;s.verification=state.verification;relay.update(i,state);if(s.status!==state.status)console.log(JSON.stringify({event:'session_status',slot:labels[i],status:state.status,verification:state.verification}));s.status=state.status;s.detail=state.detail;transcripts[i].reset(state.epoch);
+  if(state.ended||state.status==='ended'){await closeSlot(i,s);console.log(JSON.stringify({event:'session_closed',slot:labels[i],reason:'stranger-disconnected'}));return;}
   const m=relay.members[i];for(const msg of state.messages){transcripts[i].add('incoming',msg.text);relay.incoming(i,msg.text);}
   while(m.queue.length&&!relay.valid(i,m.queue[0])){const dropped=m.queue.shift();const row=transcripts[i].items.find(r=>r.id===dropped.transcriptId);if(row)row.delivery='failed';}
   if(m.queue.length&&Date.now()-s.lastSend>=1100){const item=m.queue[0];
@@ -98,7 +101,7 @@ const server=http.createServer(async(req,res)=>{try{
   const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));
   if(operation==='inspect'){await open(i);}
   else if(operation==='connect'){relay.members[i].error='';if(!relay.enabled)relay.toggle(true);await connect(i);}
-  else if(operation==='close'){slots[i]=null;relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);if(s){await s.context.storageState({path:data+'/slot-'+i+'.json'});await s.context.close();}}
+  else if(operation==='close'){await closeSlot(i,s);}
   else{
    if(!s)throw new Error('Connect this chat first.');const b=await body(req);
    if(typeof b.text!=='string'||!b.text.trim()||b.text.length>4000)throw new Error('Write a message of 1–4000 characters.');

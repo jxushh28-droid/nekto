@@ -16,7 +16,8 @@
   const blocking=d.blocking.element,verification=d.blocking.required;state.verification=d.blocking.verification;
   const searching=visible(document.querySelector('#search_company_loading'))||/\/searching(?:[/?]|$)/.test(location.hash);
   const start=visible(document.querySelector('#searchCompanyBtn'));
-  state.status=verification?'verification':blocking?'blocked':connected?'connected':searching?'searching':start?'ready':d.native&&d.dialog?.close||visible(document.querySelector('.status-end'))?'ended':'loading';
+  state.ended=!searching&&!connected&&(d.native?!!d.dialog?.close:visible(document.querySelector('.status-end')));
+  state.status=verification?'verification':blocking?'blocked':connected?'connected':searching?'searching':state.ended?'ended':start?'ready':'loading';
   state.detail=verification?'Nekto запросил проверку CAPTCHA для этого сеанса.':blocking?(blocking.innerText||blocking.textContent||'').trim().slice(0,260):'';
   return d;
  }
