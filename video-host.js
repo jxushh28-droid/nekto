@@ -1,6 +1,6 @@
 import {loadVideoSessions,saveVideoSessions,validateVideoSessions} from './video-session-config.js';
 import {readFile} from 'node:fs/promises';import {randomUUID} from 'node:crypto';
-const target='https://ometv.chat/embed/index.html';
+const target='https://ometv.chat/';
 const injection=await readFile(new URL('./browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/video-runtime.js',import.meta.url),'utf8');
 
 function videoFailure(error,stage,sessions){
