@@ -8,7 +8,7 @@ import {Transcript} from './transcript.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
 import {loadTokens,saveTokens} from './token-config.js';
-import {VideoHost} from './video-host.js';
+import {YapVideoHost} from './yap-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
@@ -22,7 +22,7 @@ const safeError=e=>{let text=String(e?.message||e);for(const token of configured
 const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});configuredTokens=await loadTokens(data);
 let browser=null,launching=null,videoBrowser=null,videoLaunching=null;
 async function getVideoBrowser(){if(videoBrowser?.isConnected())return videoBrowser;if(!videoLaunching)videoLaunching=chromium.launch({headless:true,args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream','--js-flags=--max-old-space-size=128']}).then(b=>{videoBrowser=b;return b;}).finally(()=>videoLaunching=null);return videoLaunching;}
-const video=new VideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
+const video=new YapVideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
 const audio=new AudioHost({data});
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/chat/';
@@ -108,12 +108,11 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/api/video/status'&&req.method==='GET')return json(res,200,video.status());
  if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{sessions:video.sessions});}
  if(url.pathname==='/api/video/diagnostics'&&req.method==='GET')return json(res,200,await video.inspect());
- if(url.pathname==='/api/video/validate'&&req.method==='POST'){if(videoOps.size||video.slots.some(s=>s?.busy)||video.sessionSetup)return json(res,409,{error:'Video session is busy'});return json(res,200,await video.validateSessions());}
- if(url.pathname==='/api/video/sessions'&&req.method==='POST'){if(videoOps.size||video.slots.some(s=>s?.busy)||video.sessionSetup)return json(res,409,{error:'Video session is busy'});const b=await body(req,80000);try{return json(res,200,await video.applySessions(b.sessions));}catch(e){return json(res,400,{error:/^(Paste the complete|OmeTV session requires|Provide two|Use two|Video session setup)/.test(e.message)?e.message:'Could not save the OmeTV sessions.'});}}
+ if(['/api/video/validate','/api/video/sessions'].includes(url.pathname)&&req.method==='POST')return json(res,400,{error:'Yap video does not require imported session tokens.'});
  if(url.pathname==='/api/video/toggle'&&req.method==='POST'){const b=await body(req);await video.toggle(!!b.enabled,!!b.consent);return json(res,200,{ok:true});}
  if(url.pathname==='/api/video/test'&&req.method==='POST')return json(res,200,await video.test(Number(process.env.PORT||3000)));
  const videoMatch=url.pathname.match(/^\/api\/video\/([01])\/(start|close|send|stream)$/);
- if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i);else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){const allowed=/^(OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV client|Could not apply|OmeTV requires|Sign in to|The video bridge|Connect this participant|Write a message|OmeTV did not|Open this video|Invalid browser|Could not open)/.test(e.message);return json(res,400,{error:allowed?e.message:'Hosted video operation failed. Check your OmeTV session and try again.'});}finally{videoOps.delete(i);}}
+ if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i);else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){const allowed=/^(Yap|OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV client|Could not apply|OmeTV requires|Sign in to|The video bridge|Connect this participant|Write a message|OmeTV did not|Open this video|Invalid browser|Could not open)/.test(e.message);return json(res,400,{error:allowed?e.message:'Hosted video operation failed. Check the Yap video state and try again.'});}finally{videoOps.delete(i);}}
  if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],verification:slots[i]?.verification||null,status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='GET')return json(res,200,{tokens:configuredTokens});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){

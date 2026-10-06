@@ -5,6 +5,33 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {VideoHost} from '../video-host.js';
+import {YapVideoHost} from '../yap-video-host.js';
+test('Yap bridge carries generated video and audio in both directions',async()=>{
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
+  const context=await browser.newContext(options);
+  await context.route('http://127.0.0.1:3000/video-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><body>Generated media test</body>'}));
+  return context;
+ }})});
+ try{assert.deepEqual(await host.test(3000),{ok:true,videoBothWays:true,audioBothWays:true});}finally{await host.shutdown();await browser.close();}
+});
+test('Yap uses isolated main pages and native Start with no credential injection',async()=>{
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const contexts=[];
+ const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
+  assert.equal(options.storageState,undefined);
+  const context=await browser.newContext(options);contexts.push(context);
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><button id="entry">Start Random Video Chat</button><script>
+   window.starts=0;document.getElementById('entry').onclick=()=>{document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;};};
+  </script>`}));
+  return context;
+ }})});
+ try{
+  await host.start(0);await host.start(1);
+  assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
+  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(host.frame(slot),slot.page.mainFrame());assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
+ }finally{await host.shutdown();await browser.close();}
+});
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
  const data=await mkdtemp(join(tmpdir(),'video-frame-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const host=new VideoHost({data,pageUrl:'https://ometv.chat/',getBrowser:async()=>({newContext:async options=>{
@@ -53,22 +80,22 @@ test('runtime detects ICE connections with streamless incoming tracks',async()=>
   assert.equal(result.connected,true);assert.equal(result.backgroundGeneration,0);assert.equal(result.requestedGeneration,1);assert.equal(result.camera,true);assert.deepEqual(result.tracks,[{kind:'video',state:'live'}]);
  }finally{await context.close();await browser.close();}
 });
-test('dashboard restores saved sessions and retains edited values after Apply',async()=>{
+test('Yap dashboard connects without fetching or importing OmeTV tokens',async()=>{
  const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox']});
- const page=await browser.newPage();let imports=0,loads=0;
- const saved=[{token:'saved-A',SnDataStr:'data-A',SnHmac:'hmac-A'},{token:'saved-B',SnDataStr:'data-B',SnHmac:'hmac-B'}];
+ const page=await browser.newPage();let starts=0,sessionRequests=0;
  try{
   await page.route('https://dashboard.test/**',async route=>{
-   const req=route.request(),path=new URL(req.url()).pathname;
-   if(path==='/api/video/status')return route.fulfill({json:{slots:[0,1].map(i=>({label:i===0?'A':'B',open:false,status:'closed',connected:false,busy:false})),sessionConfigured:[true,true]}});
-   if(path==='/api/video/sessions'){if(req.method()==='GET'){loads++;return route.fulfill({json:{sessions:saved}});}imports++;assert.deepEqual(req.postDataJSON().sessions,[JSON.stringify(saved[0]),'edited-B']);return route.fulfill({json:{ok:false,results:[{slot:0,ok:false,error:'fixture refusal'}]}});}
+   const path=new URL(route.request().url()).pathname;
+   if(path==='/api/video/status')return route.fulfill({json:{slots:[0,1].map(i=>({label:i===0?'A':'B',open:false,status:'closed',connected:false,busy:false}))}});
+   if(path==='/api/video/sessions'){sessionRequests++;return route.fulfill({json:{sessions:[null,null]}});}
+   if(path==='/api/video/0/start'){starts++;return route.fulfill({json:{ok:true}});}
    const file=path==='/video'?'../public/video.html':path==='/video.js'?'../public/video.js':path==='/stream-player.js'?'../browser/stream-player.js':null;
    return route.fulfill({contentType:path.endsWith('.js')?'application/javascript':'text/html',body:file?await readFile(new URL(file,import.meta.url),'utf8'):''});
   });
-  await page.goto('https://dashboard.test/video');await page.waitForFunction(()=>document.getElementById('sessionB').value.includes('saved-B'));
-  await page.locator('#sessionB').fill('edited-B');await page.locator('#applySessions').click();await page.waitForFunction(()=>document.getElementById('error').textContent.includes('fixture refusal'));
-  assert.equal(await page.locator('#sessionB').inputValue(),'edited-B');assert.equal(await page.locator('#sessionA').inputValue(),JSON.stringify(saved[0]));assert.equal(imports,1);assert.equal(loads,1);
-  await page.reload();await page.waitForFunction(()=>document.getElementById('sessionB').value.includes('saved-B'));assert.equal(loads,2);
+  await page.goto('https://dashboard.test/video');await page.waitForFunction(()=>!document.getElementById('videoHub').hidden);
+  assert.equal(await page.locator('#sessionsForm').count(),0);
+  await page.locator('#videoCard0 .start').click();await page.waitForFunction(()=>!document.querySelector('#videoCard0 .start').disabled);
+  assert.equal(starts,1);assert.equal(sessionRequests,0);
  }finally{await browser.close();}
 });
 test('site guidance and inactive notices cannot block Start; active errors remain detected',async()=>{
