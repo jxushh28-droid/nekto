@@ -137,7 +137,7 @@ async function inspectVideoStart(){
     const label=e.textContent.trim().replace(/\s+/g,' ');
     return {tag:e.tagName,id:e.id,classes:e.className,label:/^(Start|Stop|Country|I am|Начать|Стоп|Страна|Я|Қосу|Тоқтату)/i.test(label)?label.slice(0,100):'[other-control]',disabled:e.hasAttribute('disabled'),ariaDisabled:e.getAttribute('aria-disabled'),display:s.display,visibility:s.visibility,width:Math.round(r.width),height:Math.round(r.height)};
    }).slice(0,30));
-   let trial={ok:true};try{await slot.page.frameLocator('iframe#videochat').getByText('Start',{exact:true}).click({trial:true,timeout:5000});}catch(e){trial={ok:false,detail:String(e.message).replace(/https?:\/\/\S+/g,'[url]').slice(0,1800)};}
+   let trial={ok:true};try{await probe.startControl(slot).click({trial:true,timeout:5000});}catch(e){trial={ok:false,detail:String(e.message).replace(/https?:\/\/\S+/g,'[url]').slice(0,1800)};}
    console.log(JSON.stringify({event:'video_start_probe',slot:i===0?'A':'B',state:{login:state.login,verification:state.verification,mediaReady:state.mediaReady},buttons,trial}));
   }catch{console.log(JSON.stringify({event:'video_start_probe',slot:i===0?'A':'B',ok:false,reason:'import-failed'}));}
   finally{await probe.close(i);}

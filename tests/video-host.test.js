@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {EventEmitter} from 'node:events';import {VideoHost} from '../video-host.js';
-function fixture(){const calls=[[],[]];const frames=[0,1].map(i=>({url:()=> 'https://ometv.chat/embed/index.html',evaluate:async(fn,arg)=>{calls[i].push({fn:fn.toString(),arg});return {connected:true,mediaReady:true};},getByText:()=>({click:async()=>calls[i].push({start:true})}),locator:()=>({fill:async text=>calls[i].push({text}),press:async key=>calls[i].push({key})})}));const host=new VideoHost({getBrowser:async()=>{},data:'/fixture'});host.slots=frames.map((frame,i)=>({page:{frames:()=>[frame],frameLocator:()=>frame},context:{close:async()=>calls[i].push({closed:true})},status:'connected',connected:true,cache:[],cacheBytes:0,remember:false,savedAt:Date.now()}));return {host,calls};}
+function fixture(){const calls=[[],[]];const frames=[0,1].map(i=>({url:()=> 'https://ometv.chat/embed/index.html',evaluate:async(fn,arg)=>{calls[i].push({fn:fn.toString(),arg});return {connected:true,mediaReady:true};},getByText:()=>({click:async()=>calls[i].push({start:true})}),locator:()=>({click:async()=>calls[i].push({start:true}),fill:async text=>calls[i].push({text}),press:async key=>calls[i].push({key})})}));const host=new VideoHost({getBrowser:async()=>{},data:'/fixture'});host.slots=frames.map((frame,i)=>({page:{frames:()=>[frame],frameLocator:()=>frame},context:{close:async()=>calls[i].push({closed:true})},status:'connected',connected:true,cache:[],cacheBytes:0,remember:false,savedAt:Date.now()}));return {host,calls};}
 test('video routing requires both connected participants and explicit consent',async()=>{const f=fixture();try{await assert.rejects(f.host.toggle(true,false),/Confirm/);assert.equal(f.host.enabled,false);f.host.slots[1].connected=false;await assert.rejects(f.host.toggle(true,true),/Connect both/);f.host.slots[1].connected=true;await f.host.toggle(true,true);assert.equal(f.host.enabled,true);}finally{await f.host.shutdown();}});
 test('media forwards only with enabled routing, and old-generation segments are dropped',async()=>{const f=fixture();try{const slot=f.host.slots[0];await f.host.segment(0,slot,{generation:'one',data:'YQ=='});assert.equal(f.calls[1].length,0);f.host.enabled=true;await f.host.segment(0,slot,{generation:'two',data:'Yg=='});assert.equal(f.calls[1].length,1);await f.host.segment(0,slot,{generation:'one',data:'YQ=='});assert.equal(f.calls[1].length,1);assert.equal(slot.cache.length,1);assert.equal(slot.cache[0].generation,'two');}finally{await f.host.shutdown();}});
 test('private video text uses only the selected side',async()=>{const f=fixture();try{await f.host.send(0,'original message');assert.ok(f.calls[0].some(c=>c.text==='original message'));assert.equal(f.calls[1].length,0);}finally{await f.host.shutdown();}});
@@ -8,7 +8,7 @@ test('stream subscriptions replay initial headers and clean up on disconnect',as
 test('OmeTV profile is applied exactly twice before Start and is reused without reloading',async()=>{
  const f=fixture(),sequence=[];
  try{await f.host.sessionsLoaded;f.host.sessions[0]={token:'fixture-token',SnDataStr:'signed-data',SnHmac:'signature'};
- const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,login:false,verification:false,connected:false});frame.getByText=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async(fn,session)=>{assert.equal(session.SnDataStr,'signed-data');assert.ok(fn.toString().includes('postMessage'));sequence.push('apply');};
+ const frame=f.host.frame(f.host.slots[0]);frame.evaluate=async()=>({mediaReady:true,login:false,verification:false,connected:false});frame.locator=()=>({click:async()=>sequence.push('start')});f.host.slots[0].page.evaluate=async(fn,session)=>{assert.equal(session.SnDataStr,'signed-data');assert.ok(fn.toString().includes('postMessage'));sequence.push('apply');};
  await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start']);await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start','start']);
  }finally{await f.host.shutdown();}
 });
@@ -30,7 +30,7 @@ test('frame replacement during both applies uses the new frame without extra aut
   }}));
   f.host.slots[0].page.frames=()=>[frames[active]];
   f.host.slots[0].page.evaluate=async()=>{sequence.push('apply');active++;};
-  f.host.slots[0].page.frameLocator=()=>({getByText:()=>({click:async()=>sequence.push('start-'+active)})});
+  f.host.slots[0].page.frameLocator=()=>({locator:()=>({click:async()=>sequence.push('start-'+active)})});
   await f.host.start(0);assert.deepEqual(sequence,['apply','apply','start-2']);
  }finally{await f.host.shutdown();}
 });

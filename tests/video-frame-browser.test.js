@@ -5,13 +5,13 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {VideoHost} from '../video-host.js';
-test('real Chromium follows replaced OmeTV fixture iframe after each session application',async()=>{
+test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
  const data=await mkdtemp(join(tmpdir(),'video-frame-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const host=new VideoHost({data,getBrowser:async()=>({newContext:async options=>{
   const context=await browser.newContext(options);
   await context.route('https://ometv.chat/**',async route=>{
    const embed=new URL(route.request().url()).pathname==='/embed/index.html';
-   const html=embed?`<!doctype html><body><video id="local-video"></video><input id="chat-text"><button id="start">Start</button><script>
+   const html=embed?`<!doctype html><body><video id="local-video"></video><input id="chat-text"><div class="btn btn-main" id="start" style="width:148px;height:157px;display:flex;align-items:center;justify-content:center"><div class="btn__bg" style="pointer-events:none"><span data-tr="start">Start</span></div></div><script>
     window.__videoHost={status:()=>({mediaReady:true,login:false,verification:false,connected:false})};
     window.addEventListener('message',e=>{if(e.data?.source==='sn')parent.postMessage({replace:true},'https://ometv.chat')});
     document.getElementById('start').onclick=()=>parent.postMessage({started:true},'https://ometv.chat');
@@ -28,6 +28,8 @@ test('real Chromium follows replaced OmeTV fixture iframe after each session app
  }})});
  try{
   await host.sessionsLoaded;host.sessions[0]={token:'fixture-token',SnDataStr:'fixture-signed-data',SnHmac:'fixture-signature'};
+  await host.open(0);await host.currentClient(host.slots[0]);
+  await assert.rejects(host.slots[0].page.frameLocator('iframe#videochat').getByText('Start',{exact:true}).click({trial:true,timeout:500}),/Timeout/);
   await host.start(0);
   await host.slots[0].page.waitForFunction(()=>window.fixtureStarted===1,{},{timeout:5000});
   const result=await host.slots[0].page.evaluate(()=>({applications:window.fixtureApplies,starts:window.fixtureStarted}));
