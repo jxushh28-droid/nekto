@@ -71,3 +71,20 @@ test('dashboard restores saved sessions and retains edited values after Apply',a
   await page.reload();await page.waitForFunction(()=>document.getElementById('sessionB').value.includes('saved-B'));assert.equal(loads,2);
  }finally{await browser.close();}
 });
+test('site guidance and inactive notices cannot block Start; active errors remain detected',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://ometv.chat/**',route=>route.fulfill({contentType:'text/html',body:`<video id="local-video"></video><input id="chat-text"><span data-tr="rules">Breaking rules may get you banned. Enable your camera before starting.</span><div style="opacity:0"><span data-tr="banned">You have been banned.</span></div><div aria-hidden="true"><span data-tr="camera_error">Camera access denied.</span></div><div style="position:fixed;top:-1000px"><span data-tr="network_error">Connection failed.</span></div><div class="btn btn-main" id="start"><span data-tr="start">Start</span></div><script>window.starts=0;document.getElementById('start').onclick=()=>window.starts++;</script>`}));
+  const page=await context.newPage();await page.goto('https://ometv.chat/embed/index.html');
+  assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'');
+  await page.locator('.btn.btn-main').click();assert.equal(await page.evaluate(()=>window.starts),1);
+  await page.evaluate(()=>{const el=document.createElement('div');el.dataset.tr='active_error';el.textContent='You have been banned.';document.body.append(el);});
+  assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV has restricted this session.');
+  await page.evaluate(()=>document.querySelector('[data-tr="active_error"]').textContent='Camera access denied.');
+  assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not access the hosted camera.');
+  await page.evaluate(()=>document.querySelector('[data-tr="active_error"]').textContent='Connection failed.');
+  assert.equal(await page.evaluate(()=>window.__videoHost.status().nativeError),'OmeTV could not connect to its server.');
+ }finally{await context.close();await browser.close();}
+});
