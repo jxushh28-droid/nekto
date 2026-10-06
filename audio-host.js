@@ -258,6 +258,12 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     if(this.slots[i])this.slots[i].operationError='';
     try{
       const s=await this.prepare(i);
+      // Keep document-start seeding unchanged and let native startup settle.
+      // State is checked again after the wait, before any Start click.
+      s.stage='wait-before-start';
+      this.recordAttempt(i,s);
+      await new Promise(resolve=>setTimeout(resolve,2000));
+      if(this.slots[i]!==s||s.stopped)throw Error('Audio session closed before starting the call.');
       s.stage='before-start';
       for(let n=0,clicked=false;n<30;n++){
         const state=await this.state(s);
