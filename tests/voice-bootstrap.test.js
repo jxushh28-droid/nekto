@@ -64,3 +64,10 @@ test('malformed storage reports the parse stage without exposing stored values',
   assert.match(result.status.reason, /^json-parse:/);
   assert.equal(JSON.stringify(result.status).includes('old-private-fixture-token'), false);
 });
+import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
+test('context storage imports audio credentials once while preserving unrelated settings',()=>{
+ const previous={cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{duration:2}})},{name:'unrelated',value:'preserved'}]},{origin:'https://other.test',localStorage:[{name:'storage_audio_v2',value:'untouched'}]}]};
+ const result=voiceStorageState('fixture-token',previous);
+ assert.equal(voiceStorageMatches(result,'fixture-token'),true);assert.equal(voiceStorageMatches(previous,'fixture-token'),false);
+ const saved=JSON.parse(result.origins[0].localStorage[0].value);assert.equal(saved.user.volume,37);assert.equal(saved.chat.duration,2);assert.equal(result.origins[0].localStorage[1].value,'preserved');assert.equal(result.origins[1].localStorage[0].value,'untouched');
+});

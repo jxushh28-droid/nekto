@@ -1,19 +1,28 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {chromium} from 'playwright';
-import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
 const base='https://dashboard-fixture.test';
 test('audio token exists before the first page script and settings survive reload',async()=>{
  const browser=await chromium.launch({headless:true});try{
-  const context=await browser.newContext({storageState:{cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{lastStartDialogTime:123}})}]}]}});
-  await context.addInitScript(primeVoiceStorage,'fixture-token');
+  const context=await browser.newContext({storageState:voiceStorageState('fixture-token',{cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{lastStartDialogTime:123}})}]}]})});
   // All requests are fulfilled locally; no Nekto traffic or real call is made.
   await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<script>window.firstScriptStorage=JSON.parse(localStorage.getItem("storage_audio_v2"));</script>'}));
   const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
   for(let n=0;n<2;n++){
-   const state=await page.evaluate(()=>({first:window.firstScriptStorage,bootstrap:window.__voiceTokenBootstrap}));
+   const state=await page.evaluate(()=>({first:window.firstScriptStorage}));
    assert.deepEqual(state.first,{user:{authToken:'fixture-token',volume:37},chat:{lastStartDialogTime:123}});
-   assert.equal(state.bootstrap.ok,true);
+   assert.equal(voiceStorageMatches(await context.storageState(),'fixture-token'),true);
    if(n===0)await page.reload();
   }
+ }finally{await browser.close();}
+});
+test('context import never restores an already consumed token on a later document load',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext({storageState:voiceStorageState('fixture-original-token')});
+  await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<script>window.loadedToken=JSON.parse(localStorage.getItem("storage_audio_v2")).user.authToken;</script>'}));
+  const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
+  assert.equal(await page.evaluate(()=>window.loadedToken),'fixture-original-token');
+  await page.evaluate(()=>localStorage.setItem('storage_audio_v2',JSON.stringify({user:{authToken:'fixture-native-replacement'}})));
+  await page.reload();assert.equal(await page.evaluate(()=>window.loadedToken),'fixture-native-replacement');
  }finally{await browser.close();}
 });
 for(const mode of ['text','audio'])test(mode+' tokens remain visible after failed Apply and restore after reload',async()=>{

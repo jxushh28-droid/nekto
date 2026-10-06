@@ -102,7 +102,7 @@ const server=http.createServer(async(req,res)=>{try{
    return json(res,404,{error:'Unknown audio operation'});
   }catch(e){return json(res,400,{error:audio.error(e)});}
  }
- const audioStream=url.pathname.match(/^\/api\/audio\/([01])\/stream$/);if(audioStream&&req.method==='GET'){const i=Number(audioStream[1]);if(!audio.slots[i])return json(res,409,{error:'Connect this audio side first.'});return audio.subscribe(i,res);}
+ const audioStream=url.pathname.match(/^\/api\/audio\/([01])\/stream$/);if(audioStream&&req.method==='GET'){const i=Number(audioStream[1]);if(!audio.slots[i]||audio.slots[i].stopped)return json(res,409,{error:'Connect this audio side first.'});return audio.subscribe(i,res);}
  if(audio.hasOpen()&&url.pathname.startsWith('/api/video/')&&req.method==='POST'&&!/\/(close|toggle)$/.test(url.pathname))return json(res,409,{error:'Close audio sessions before starting video.'});
  if(url.pathname==='/api/video/status'&&req.method==='GET')return json(res,200,video.status());
  if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{sessions:video.sessions});}

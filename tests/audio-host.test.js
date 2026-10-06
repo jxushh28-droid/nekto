@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
 import {loadAudioTokens} from '../audio-token-config.js';
 import {AudioGraph} from '../audio-graph.js';
-async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
+async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
   f.host.tokens=['diagnostic-fixture-token',null];let calls=0;
@@ -14,12 +14,13 @@ test('preparation diagnostics use the stored page and an accessible redactor',as
    return [];
   };
   const slot=await f.host.prepare(0);
-  assert.equal(slot.page,page);assert.equal(slot.prepared,true);assert.equal(calls,4);
+  assert.equal(slot.page,page);assert.equal(slot.prepared,true);assert.equal(calls,3);
  }finally{await f.done();}
 });
 test('failed document-start seeding never rewrites the token after the page starts',async()=>{
  const f=await fixture();try{
   f.host.tokens=['bootstrap-fixture-token',null];let fallbackWrites=0;
+  f.host.slots[0].bootstrap={ok:false,reason:'context-storage-mismatch'};
   f.host.slots[0].page.evaluate=async fn=>{
    if(fn.toString().includes('localStorage.setItem')){fallbackWrites++;return;}
    return {ok:false,reason:'bootstrap-not-run'};
@@ -73,8 +74,9 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
   const page=new EventEmitter();page.goto=async()=>{};page.waitForFunction=async()=>{};
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
-  const context={grantPermissions:async()=>{},addInitScript:async()=>{},newPage:async()=>page};
-  f.host.launch=async()=>({newContext:async()=>context,close:async()=>{}});
+  let imported;
+  const context={storageState:async()=>imported,grantPermissions:async()=>{},addInitScript:async input=>{assert.equal(typeof input.content,'string');},newPage:async()=>page};
+  f.host.launch=async()=>({newContext:async options=>{imported=options.storageState;return context;},close:async()=>{}});
   console.log=value=>logs.push(String(value));
   await f.host.prepare(0);
   const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/?token=private-query-value';
@@ -116,3 +118,14 @@ test('voice stops when native startup requires verification, rejects the token o
 test('voice startup timeout never retries authorization',async()=>{const f=voiceFixture();try{const result=await confirmVoiceSession({token:'expected-token',timeout:20});assert.equal(result.reason,'native-authorization-timeout');assert.deepEqual(f.counts(),{writes:0,requests:0});}finally{f.done();}});
 test('native registration rejection is reported without requesting a replacement token',async()=>{const f=voiceFixture();try{f.system.errorRegistered=425;const result=await confirmVoiceSession({token:'expected-token',timeout:100});assert.equal(result.reason,'native-registration-error-425');assert.equal(result.diagnostics.registrationError,425);assert.deepEqual(f.counts(),{writes:0,requests:0});}finally{f.done();}});
 test('polling preserves a failed startup reason and never repeats preparation automatically',async()=>{const f=await fixture();let preparations=0;try{f.states[0]={status:'ready',connected:false};f.host.slots[0].connected=false;f.host.prepare=async()=>{preparations++;throw Error('Nekto rejected voice registration (code 425).');};await assert.rejects(f.host.start(0),/425/);await f.host.tick();await f.host.tick();const status=f.host.status().slots[0];assert.equal(status.status,'error');assert.match(status.error,/425/);assert.equal(preparations,1);}finally{await f.done();}});
+test('verification during Start closes the browser and preserves the failure checkpoint without retries',async()=>{const f=await fixture();try{
+ const s=f.host.slots[0];let closed=0,reads=0;s.stage='before-start';s.browser.close=async()=>closed++;
+ f.host.prepare=async()=>s;f.host.state=async slot=>{if(slot!==s)return f.states[1];reads++;return {status:'verification',connected:false,detail:'Nekto requires verification.'};};
+ await assert.rejects(f.host.start(0),/verification/);await f.host.tick();await f.host.tick();
+ const result=f.host.status().slots[0];assert.equal(closed,1);assert.equal(reads,1);assert.equal(result.open,false);assert.equal(result.closable,true);assert.equal(result.stopped,true);assert.equal(result.status,'verification');assert.equal(result.stage,'before-start');assert.equal(result.bootstrap.ok,true);
+ }finally{await f.done();}});
+test('verification after search starts also closes the browser and blocks native reconnects',async()=>{const f=await fixture();try{
+ let closed=0;f.host.slots[0].browser.close=async()=>closed++;f.host.slots[0].stage='searching';
+ f.states[0]={status:'verification',connected:false,detail:'Nekto requires verification.'};
+ await f.host.tick();await f.host.tick();assert.equal(closed,1);assert.equal(f.host.status().slots[0].stopped,true);assert.equal(f.host.requested,false);assert.equal(f.routes.at(-1),false);
+ }finally{await f.done();}});

@@ -5,7 +5,7 @@ import {AudioGraph} from './audio-graph.js';
 import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
-import {primeVoiceStorage} from './voice-bootstrap.js';
+import {voiceStorageState,voiceStorageMatches} from './voice-storage-state.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -37,11 +37,12 @@ export class AudioHost{
     this.setup=false;
     this.polling=false;
     this.ops=new Set();
+    this.attempts=[null,null];
     this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
     this.timer=setInterval(()=>void this.tick(),500);
   }
 
-  hasOpen(){return this.setup||this.ops.size>0||this.slots.some(Boolean);}
+  hasOpen(){return this.setup||this.ops.size>0||this.slots.some(s=>s&&!s.stopped);}
 
   error(e){
     let message=String(e?.message||e);
@@ -53,6 +54,7 @@ export class AudioHost{
     await this.loaded;
     if(!this.tokens[i])throw Error('Enter this side’s voice authToken first.');
     let s=this.slots[i];
+    if(s?.stopped)throw Error('Audio session stopped after failure. Apply a fresh token before testing again.');
     if(s?.prepared)return s;
 
     if(!s){
@@ -70,12 +72,14 @@ export class AudioHost{
       const context=await browser.newContext({
         viewport:{width:420,height:760},
         locale:'ru-RU',
-        bypassCSP:true
+        storageState:voiceStorageState(this.tokens[i])
       });
+
+      const bootstrap={ok:voiceStorageMatches(await context.storageState(),this.tokens[i]),reason:'context-storage-before-navigation'};
+      if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: context-storage-mismatch');
 
       await context.grantPermissions(['microphone'],{origin:'https://nekto-me.kz'});
 
-      await context.addInitScript(primeVoiceStorage,this.tokens[i]);
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
@@ -104,6 +108,8 @@ page.on("websocket", ws => {
   const log = (event, details = {}) => {
     console.log(JSON.stringify({
       time: new Date().toISOString(),
+      slot:i?'B':'A',
+      attemptId:s.epoch,
       socketId,
       event,
       ...details
@@ -129,8 +135,10 @@ page.on("websocket", ws => {
   ws.on("socketerror", () => log("error"));
   ws.on("close", () => log("closed"));
 });
-      s={browser,context,page,status:'loading',connected:false,prepared:false,error:'',epoch:crypto.randomUUID()};
+      s={browser,context,page,bootstrap,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
       this.slots[i]=s;
+      this.recordAttempt(i,s);
+      console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',attemptId:s.epoch,...bootstrap}));
 
       page.on('dialog',d=>d.dismiss().catch(()=>{}));
       page.on('popup',p=>p.close().catch(()=>{}));
@@ -145,6 +153,7 @@ page.on("websocket", ws => {
 
       await page.goto(site,{waitUntil:'domcontentloaded',timeout:45000});
       }catch(e){
+        if(s)this.recordAttempt(i,s);
         if(this.slots[i]===s)this.slots[i]=null;
         await browser.close().catch(()=>{});
         throw e;
@@ -153,12 +162,13 @@ page.on("websocket", ws => {
 
     // Only document-start seeding is valid. A post-navigation write is too
     // late to establish which token the site's client loaded at startup.
-    const bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'bootstrap-not-run'});
+    const bootstrap=s.bootstrap||{ok:false,reason:'context-storage-not-verified'};
 
-    console.log(JSON.stringify({event:'audio_token_bootstrap',slot:i?'B':'A',...bootstrap}));
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
+    s.stage='await-native-client';
     await s.page.waitForFunction(voiceReady,null,{timeout:20000});
+    s.stage='confirm-native-session';
     const registrationDiagnostic = await s.page.evaluate(() => {
   const stores = [...document.querySelectorAll("*")]
     .map(el => el.__vue__?.$store)
@@ -185,8 +195,8 @@ page.on("websocket", ws => {
     firstLoadCompleted: system.isFirstLoaded === true,
     clientAuthFlag: system.isAuth === true,
     socketConnected: system.socketConnected === true,
-    registrationError: system.errorRegistered ?? null,
-    disconnectReason: system.forceDisconnectReason ?? null,
+    registrationError: Number(system.errorRegistered)||0,
+    disconnectReason: typeof system.forceDisconnectReason==='number'?system.forceDisconnectReason:system.forceDisconnectReason?'present':null,
     captchaRequired: !!system.captchaRequired,
     hcaptchaRequired: !!system.hcaptchaRequired,
     liveTokenPresent: !!user.authToken,
@@ -200,17 +210,17 @@ page.on("websocket", ws => {
   };
 });
 
-console.log(
-  redactWsText(JSON.stringify(registrationDiagnostic, null, 2))
-);
+console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A',attemptId:s.epoch,...registrationDiagnostic}));
     const result=await s.page.evaluate(confirmVoiceSession,{token:this.tokens[i]});
     s.authorization=result.diagnostics;
+    this.recordAttempt(i,s);
 
     const trace=await s.page.evaluate(()=>window.__audioHost?.diagnostics?.()||[]);
     this.recordDiagnostics(i,s,trace);
 
-    console.log(JSON.stringify({event:'audio_session_confirmation',slot:i?'B':'A',ok:result.ok,reason:result.reason,...result.diagnostics}));
+    console.log(JSON.stringify({event:'audio_session_confirmation',slot:i?'B':'A',attemptId:s.epoch,ok:result.ok,reason:result.reason,...result.diagnostics}));
     if(!result.ok){
+      s.failureStatus=result.reason==='verification-required'?'verification':result.reason==='native-restriction'?'blocked':'error';
       throw Error(
         result.reason==='verification-required'
           ?'Nekto requires verification for this voice session.'
@@ -221,6 +231,7 @@ console.log(
     }
 
     s.prepared=true;
+    s.stage='native-session-ready';
     s.status='ready';
     return s;
   }
@@ -239,23 +250,28 @@ console.log(
   async start(i){
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
     this.ops.add(i);
+    this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare',startedAt:Date.now()};
     if(this.slots[i])this.slots[i].operationError='';
     try{
       const s=await this.prepare(i);
+      s.stage='before-start';
       for(let n=0,clicked=false;n<30;n++){
         const state=await this.state(s);
-        if(state?.status==='verification'||state?.status==='blocked')throw Error(state.detail||'Nekto refused this voice session.');
+        if(state?.status==='verification'||state?.status==='blocked'){s.failureStatus=state.status;throw Error(state.detail||'Nekto refused this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
+          s.stage=state.status;
           return;
         }
         if(!clicked&&state?.authenticated&&state?.socketConnected&&await s.page.locator('#searchCompanyBtn').isVisible()){
           const cookies=s.page.locator('#acceptCookies');
           if(await cookies.isVisible()&&await cookies.isEnabled())await cookies.click({timeout:800}).catch(()=>{});
-          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',phase:'before-click',authenticated:state.authenticated,socketConnected:state.socketConnected,registrationError:state.registrationError||0}));
+          s.stage='start-click';
+          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',attemptId:s.epoch,phase:'before-click',authenticated:state.authenticated,socketConnected:state.socketConnected,registrationError:state.registrationError||0}));
           await s.page.locator('#searchCompanyBtn').click({timeout:5000});
           clicked=true;
-          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',phase:'clicked'}));
+          s.stage='wait-search';
+          console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',attemptId:s.epoch,phase:'clicked'}));
         }
         await new Promise(r=>setTimeout(r,500));
       }
@@ -264,11 +280,13 @@ console.log(
       if(this.slots[i]){
         this.slots[i].error=this.error(e);
         this.slots[i].operationError=this.error(e);
-        this.slots[i].status='error';
+        this.slots[i].status=this.slots[i].failureStatus||'error';
         this.slots[i].connected=false;
+        await this.stopFailed(i,this.slots[i]);
       }
       throw Error(this.error(e));
     }finally{
+      if(this.slots[i])this.recordAttempt(i,this.slots[i]);
       this.ops.delete(i);
     }
   }
@@ -322,11 +340,15 @@ console.log(
     return {ok:results.every(x=>x.ok),results};
   }
 
+  recordAttempt(i,s){
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null};
+  }
+
   recordDiagnostics(i,s,entries=[]){
     for(const entry of entries){
       if(entry.seq<=(s.lastDiagnostic||0))continue;
       s.lastDiagnostic=entry.seq;
-      console.log(JSON.stringify({event:'audio_native_state',slot:i?'B':'A',...entry}));
+      console.log(JSON.stringify({event:'audio_native_state',slot:i?'B':'A',attemptId:s.epoch,...entry}));
     }
     s.diagnostics=entries.slice(-24);
   }
@@ -337,7 +359,7 @@ console.log(
     try{
       for(let i=0;i<2;i++){
         const s=this.slots[i];
-        if(!s||this.ops.has(i)||s.crashed)continue;
+        if(!s||this.ops.has(i)||s.crashed||s.stopped)continue;
         try{
           const state=await this.state(s);
           if(this.setup)return;
@@ -351,6 +373,7 @@ console.log(
           if(s.status!==state.status)
             console.log(JSON.stringify({event:'audio_session_status',slot:i?'B':'A',status:state.status,authenticated:state.authenticated,socketConnected:state.socketConnected}));
           Object.assign(s,{status:state.status,connected:state.connected,error:state.detail||''});
+          if(['verification','blocked'].includes(state.status))await this.stopFailed(i,s);
         }catch(e){
           if(this.slots[i]!==s||this.setup||this.ops.has(i))continue;
           s.status='error';
@@ -395,7 +418,13 @@ console.log(
       configured:(this.tokens||[null,null]).map(Boolean),
       slots:this.slots.map((s,i)=>({
         label:i?'B':'A',
-        open:!!s,
+        open:!!s&&!s.stopped,
+        closable:!!s,
+        stopped:!!s?.stopped,
+        attemptId:s?.epoch||null,
+        stage:s?.stage||null,
+        bootstrap:s?.bootstrap||null,
+        lastAttempt:this.attempts[i],
         status:s?.status||'closed',
         connected:!!s?.connected,
         busy:this.setup||this.ops.has(i),
@@ -410,7 +439,7 @@ console.log(
 
   ensureCapture(i){
     const original=this.slots[i];
-    if(!original||original.crashed||original.captureFailed||this.captures[i])return;
+    if(!original||original.crashed||original.stopped||original.captureFailed||this.captures[i])return;
     const child=this.captures[i]=this.graph.capture(i);
     let carry=Buffer.alloc(0);
 
@@ -472,6 +501,18 @@ console.log(
       this.clients[i].delete(res);
       if(!this.clients[i].size&&!this.slots[i]?.connected)this.stopCapture(i);
     });
+  }
+
+  async stopFailed(i,s){
+    if(this.slots[i]!==s||s.stopped)return;
+    s.stopped=true;s.connected=false;this.requested=false;this.enabled=false;
+    this.recordAttempt(i,s);
+    this.stopCapture(i);
+    for(const r of this.clients[i]){r.write('event: closed\ndata: {}\n\n');r.end();}
+    this.clients[i].clear();
+    console.warn(JSON.stringify({event:'audio_session_stopped',slot:i?'B':'A',attemptId:s.epoch,stage:s.stage,status:s.status}));
+    if(this.graph.process)await this.graph.routing(false).catch(()=>{});
+    await s.browser.close().catch(()=>{});
   }
 
   async close(i){
