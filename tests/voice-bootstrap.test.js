@@ -26,6 +26,11 @@ test('extension storage access failure retries once at readystatechange',()=>{
 test('extension failed retry does not loop or expose credentials',()=>{
  const result=run('old-private-fixture-token');assert.equal(result.status.ok,false);assert.equal(result.retries,1);result.ready();assert.equal(result.status.ok,false);assert.equal(result.retries,1);assert.equal(result.writes,0);assert.equal(JSON.stringify(result.status).includes('old-private'),false);
 });
+test('startup cannot report success when serialization drops the token from malformed array storage',()=>{
+ for(const saved of ['[]','{"user":[]}']){
+  const result=run(saved);assert.equal(result.writes,1);assert.equal(result.status.ok,false);assert.equal(result.status.reason,'extension-storage-mismatch');assert.equal(result.retries,0);assert.equal(JSON.stringify(result.status).includes('fixture-token'),false);
+ }
+});
 test('extension scope includes Nekto paths and same-origin subframes but excludes unrelated origins',()=>{
  assert.equal(run(null,{path:'/chat/'}).status.ok,true);assert.equal(run(null,{frame:true}).status.ok,true);
  const result=run(null,{origin:'https://unrelated.test'});assert.equal(result.writes,0);assert.equal(result.status,undefined);assert.equal(result.retries,0);

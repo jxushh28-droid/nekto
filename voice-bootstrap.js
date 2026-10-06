@@ -15,9 +15,14 @@ export function primeVoiceStorage(token) {
     } catch { return false; }
   };
   const apply = () => {
-    const ok = write();
-    window.__voiceTokenBootstrap = { ok, reason: ok ? 'extension-document-start' : 'extension-storage-write-failed' };
-    return ok;
+    const wrote = write();
+    let matches = false;
+    if (wrote) {
+      try { matches = JSON.parse(localStorage.getItem(KEY) || '{}')?.user?.authToken === TOKEN; }
+      catch {}
+    }
+    window.__voiceTokenBootstrap = { ok: wrote && matches, reason: !wrote ? 'extension-storage-write-failed' : matches ? 'extension-document-start' : 'extension-storage-mismatch' };
+    return wrote;
   };
   if (!apply()) document.addEventListener('readystatechange', apply, { once: true });
 }
