@@ -1,6 +1,6 @@
 import {spawn,execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdir,mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 const execute=promisify(execFile);
@@ -8,7 +8,7 @@ export class AudioGraph{
  constructor(){this.process=null;this.ready=null;this.directory=null;this.loops=[];this.inputs=[];this.routeKey=null;this.chain=Promise.resolve();}
  async pactl(...args){const {stdout}=await execute('pactl',args,{env:this.env,timeout:5000,maxBuffer:1024*1024});return stdout.trim();}
  async ensure(){if(this.ready)return this.ready;this.ready=this.initialize().catch(async()=>{await this.close();throw Error('Audio devices could not start. Check the server audio service.');});return this.ready;}
- async initialize(){this.directory=await mkdtemp(join(tmpdir(),'nekto-audio-'));await mkdir(this.directory,{mode:0o700});const socket=join(this.directory,'native');this.env={...process.env,PULSE_SERVER:'unix:'+socket};let failed=false;
+ async initialize(){this.directory=await mkdtemp(join(tmpdir(),'nekto-audio-'));const socket=join(this.directory,'native');this.env={...process.env,PULSE_SERVER:'unix:'+socket};let failed=false;
   this.process=spawn('pulseaudio',['-n','--daemonize=no','--exit-idle-time=-1','--use-pid-file=no','--log-level=error','--load=module-native-protocol-unix socket='+socket+' auth-anonymous=no'],{env:this.env,stdio:['ignore','ignore','ignore']});this.process.on('error',()=>failed=true);const daemon=this.process;this.process.on('exit',()=>{failed=true;if(this.process===daemon){this.process=null;this.ready=null;this.routeKey=null;}});
   let connected=false;for(let n=0;n<40&&!failed;n++){try{await this.pactl('info');connected=true;break;}catch{await new Promise(r=>setTimeout(r,100));}}if(!connected)throw Error('Audio service unavailable');
   for(const letter of ['A','B']){for(const kind of ['output','input'])await this.pactl('load-module','module-null-sink','sink_name=nekto_'+kind+'_'+letter,'rate=48000','channels=1','sink_properties=device.description=Nekto_'+kind+'_'+letter);await this.pactl('load-module','module-remap-source','source_name=nekto_mic_'+letter,'master=nekto_input_'+letter+'.monitor','channels=1','source_properties=device.description=Nekto_mic_'+letter);}
