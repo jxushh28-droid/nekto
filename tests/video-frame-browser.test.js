@@ -19,17 +19,17 @@ test('Yap uses isolated main pages and native Start with no credential injection
  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const contexts=[];
  const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
-  assert.equal(options.storageState,undefined);
+  assert.equal(options.storageState.origins[0].origin,'https://yap.chat');
   const context=await browser.newContext(options);contexts.push(context);
   await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><div>Loading...</div><script>
-   window.starts=0;window.entries=0;setTimeout(()=>{document.body.innerHTML='<button id="entry">Start Random Video Chat</button>';setTimeout(()=>{document.getElementById('entry').onclick=()=>{window.entries++;document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;setTimeout(()=>{document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;const status=document.createElement('div');status.textContent='Searching for stranger...';document.body.append(status);};},200);};},200);},200);
+   window.bootGender=localStorage.getItem('uhmingle_selected_gender');window.starts=0;window.entries=0;setTimeout(()=>{document.body.innerHTML='<button id="entry">Start Random Video Chat</button>';setTimeout(()=>{document.getElementById('entry').onclick=()=>{window.entries++;document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;setTimeout(()=>{document.getElementById('normal').onclick=async()=>{window.starts++;if(window.bootGender!=='male'&&window.bootGender!=='female'){document.body.innerHTML='<h2>Who are you?</h2><p>Pick your gender to start matching.</p>';return;}window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;const status=document.createElement('div');status.textContent='Searching for stranger...';document.body.append(status);};},200);};},200);},200);
   </script>`}));
   return context;
  }})});
  try{
-  await host.start(0);await host.start(1);
+  await host.start(0,{selfGender:'male'});await host.start(1,{selfGender:'female'});
   assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
-  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
+  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(await slot.page.evaluate(()=>window.bootGender),slot===host.slots[0]?'male':'female');assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');const native=await slot.page.evaluate(()=>window.__videoHost.status());assert.equal(native.nativeMediaReady,true);assert.equal(native.genderRequired,false);assert.equal(native.selfGender,slot.selfGender);assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
  }finally{await host.shutdown();await browser.close();}
 });
 test('Yap reads leaf status messages and distinguishes sign-in and media failure from verification',async()=>{
@@ -43,6 +43,8 @@ test('Yap reads leaf status messages and distinguishes sign-in and media failure
   await page.locator('#notice').evaluate(e=>{e.textContent='Finding someone';});assert.equal((await page.evaluate(()=>window.__videoHost.status())).searching,true);
   await page.locator('#notice').evaluate(e=>{e.textContent='Sign in first';});state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.login,true);assert.equal(state.verification,false);
   await page.locator('#notice').evaluate(e=>{e.textContent='Camera/Microphone permissions are required to continue';});state=await page.evaluate(()=>window.__videoHost.status());assert.match(state.nativeError,/camera or microphone/);assert.equal(state.login,false);
+  await page.locator('#notice').evaluate(e=>{e.textContent="Your camera isn't working — matching stopped.";});assert.match((await page.evaluate(()=>window.__videoHost.status())).nativeError,/camera or microphone/);
+  await page.locator('#notice').evaluate(e=>{e.textContent='Pick your gender to start matching.';});assert.equal((await page.evaluate(()=>window.__videoHost.status())).genderRequired,true);
  }finally{await context.close();await browser.close();}
 });
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
@@ -95,20 +97,20 @@ test('runtime detects ICE connections with streamless incoming tracks',async()=>
 });
 test('Yap dashboard connects without fetching or importing OmeTV tokens',async()=>{
  const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox']});
- const page=await browser.newPage();let starts=0,sessionRequests=0;
+ const page=await browser.newPage();let starts=0,sessionRequests=0,startBody;
  try{
   await page.route('https://dashboard.test/**',async route=>{
    const path=new URL(route.request().url()).pathname;
    if(path==='/api/video/status')return route.fulfill({json:{slots:[0,1].map(i=>({label:i===0?'A':'B',open:false,status:'closed',connected:false,busy:false}))}});
    if(path==='/api/video/sessions'){sessionRequests++;return route.fulfill({json:{sessions:[null,null]}});}
-   if(path==='/api/video/0/start'){starts++;return route.fulfill({json:{ok:true}});}
+   if(path==='/api/video/0/start'){starts++;startBody=route.request().postDataJSON();return route.fulfill({json:{ok:true}});}
    const file=path==='/video'?'../public/video.html':path==='/video.js'?'../public/video.js':path==='/stream-player.js'?'../browser/stream-player.js':null;
    return route.fulfill({contentType:path.endsWith('.js')?'application/javascript':'text/html',body:file?await readFile(new URL(file,import.meta.url),'utf8'):''});
   });
   await page.goto('https://dashboard.test/video');await page.waitForFunction(()=>!document.getElementById('videoHub').hidden);
   assert.equal(await page.locator('#sessionsForm').count(),0);
-  await page.locator('#videoCard0 .start').click();await page.waitForFunction(()=>!document.querySelector('#videoCard0 .start').disabled);
-  assert.equal(starts,1);assert.equal(sessionRequests,0);
+  await page.locator('#videoCard0 .selfGender').selectOption('female');await page.locator('#videoCard0 .start').click();await page.waitForFunction(()=>!document.querySelector('#videoCard0 .start').disabled);
+  assert.equal(starts,1);assert.equal(sessionRequests,0);assert.deepEqual(startBody,{selfGender:'female'});
  }finally{await browser.close();}
 });
 test('site guidance and inactive notices cannot block Start; active errors remain detected',async()=>{

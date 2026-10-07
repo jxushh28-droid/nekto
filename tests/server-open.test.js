@@ -25,6 +25,7 @@ test('audio screen endpoint requires panel authentication and returns no image f
   assert.equal((await fetch(base+'/api/audio/0/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:'fixture-token'})})).status,401);
   const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'fixture-screen-panel-password'})});assert.equal(login.status,200);
   const cookie=login.headers.get('set-cookie').split(';')[0],response=await fetch(base+'/api/audio/0/screen',{headers:{Cookie:cookie}});assert.equal(response.status,204);assert.equal(await response.text(),'');assert.equal(response.headers.get('cache-control'),'no-store');
+  const invalidGender=await fetch(base+'/api/video/0/start',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({selfGender:'invalid'})});assert.equal(invalidGender.status,400);assert.match((await invalidGender.json()).error,/valid gender/);
  }finally{
   const exited=new Promise(r=>child.once('exit',r));child.kill('SIGTERM');await exited;await rm(temporary,{recursive:true,force:true});
  }

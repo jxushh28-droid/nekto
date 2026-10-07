@@ -5,17 +5,25 @@ import {randomUUID} from 'node:crypto';
 const target='https://yap.chat/video';
 const injection=await readFile(new URL('./browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/video-runtime.js',import.meta.url),'utf8');
 
+export function yapPreferences(selfGender='male'){
+ if(selfGender!=='male'&&selfGender!=='female')throw Error('Yap requires a valid gender selection before connecting.');
+ return {cookies:[],origins:[{origin:'https://yap.chat',localStorage:[{name:'uhmingle_selected_gender',value:selfGender}]}]};
+}
+
 export class YapVideoHost extends VideoHost{
  constructor(options){super({...options,pageUrl:target,sessionless:true});}
  frame(slot){
   if(!slot?.page)return;
   return slot.page.frames().find(f=>{try{const u=new URL(f.url());return slot.fixture?u.hostname==='127.0.0.1':u.origin==='https://yap.chat'&&u.pathname==='/video';}catch{return false;}});
  }
- async open(i,{fixture=false,port=3000}={}){
+ async open(i,{fixture=false,port=3000,selfGender='male'}={}){
+  const storageState=yapPreferences(selfGender);
   if(this.slots[i])return;
   const browser=await this.getBrowser();
-  const context=await browser.newContext({viewport:{width:1280,height:720}});
-  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,cache:[],cacheBytes:0,generation:null,error:'',network:{httpErrors:[],failedRequests:0,sockets:0,socketErrors:0,sentFrames:0,receivedFrames:0}};
+  // Yap reads this normal setup preference at mount. Without it, permission
+  // approval opens the gender picker and its own socket effect cannot run.
+  const context=await browser.newContext({viewport:{width:1280,height:720},storageState});
+  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,selfGender,cache:[],cacheBytes:0,generation:null,error:'',network:{httpErrors:[],failedRequests:0,sockets:0,socketErrors:0,sentFrames:0,receivedFrames:0}};
   this.slots[i]=slot;
   try{
    await context.grantPermissions(['camera','microphone'],{origin:'https://yap.chat'});
@@ -56,10 +64,13 @@ export class YapVideoHost extends VideoHost{
   if(state.verification)throw Error('Yap requires verification.');
   if(state.login)throw Error('Yap requires sign-in before starting this session.');
   if(state.nativeError)throw Error(state.nativeError);
+  if(state.genderRequired)throw Error('Yap requires a gender selection. Disconnect this side and choose its gender before connecting.');
  }
- async start(i){
+ async start(i,{selfGender='male'}={}){
+  yapPreferences(selfGender);
   if(this.slots[i]?.crashed)await this.close(i);
-  await this.open(i);const slot=this.slots[i];slot.busy=true;slot.startFailed=false;let stage='wait-media-runtime';
+  if(this.slots[i]?.selfGender&&this.slots[i].selfGender!==selfGender)throw Error('Yap gender was changed. Disconnect this side before connecting with the new selection.');
+  await this.open(i,{selfGender});const slot=this.slots[i];slot.busy=true;slot.startFailed=false;let stage='wait-media-runtime';
   try{
    let {state}=await this.currentClient(slot);
    this.checkNative(state);
@@ -108,7 +119,7 @@ export class YapVideoHost extends VideoHost{
   finally{slot.busy=false;}
  }
  async tick(){await super.tick();for(const s of this.slots)if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';}
- status(){return {...super.status(),provider:'yap',requiresSession:false};}
+ status(){const status=super.status();return {...status,provider:'yap',requiresSession:false,slots:status.slots.map((slot,i)=>({...slot,selfGender:this.slots[i]?.selfGender||null}))};}
  async inspect(){const result=await super.inspect();for(let i=0;i<2;i++)result.slots[i].failureStage=this.slots[i]?.failureStage||null;return result;}
  async send(i,text){
   if(typeof text!=='string'||!text.trim()||text.length>4000)throw Error('Write a message of 1–4000 characters.');

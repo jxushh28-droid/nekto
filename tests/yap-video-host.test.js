@@ -1,6 +1,11 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {YapVideoHost} from '../yap-video-host.js';
+import {YapVideoHost,yapPreferences} from '../yap-video-host.js';
+
+test('Yap receives only its selected native setup preference before page startup',()=>{
+ for(const gender of ['male','female'])assert.deepEqual(yapPreferences(gender),{cookies:[],origins:[{origin:'https://yap.chat',localStorage:[{name:'uhmingle_selected_gender',value:gender}]}]});
+ for(const gender of ['',null,'all','adult'])assert.throws(()=>yapPreferences(gender),/valid gender/);
+});
 
 function fixture(state={mediaReady:true,connected:false,searching:false}){
  const calls=[];
@@ -15,9 +20,12 @@ test('Yap starts native normal video without any imported tokens',async()=>{
  const f=fixture();try{await f.host.start(0);assert.deepEqual(f.calls,['landing','ready','start']);assert.deepEqual(f.host.sessions,[null,null]);assert.equal(f.host.status().requiresSession,false);assert.equal(f.slot.searchRequested,true);}finally{await f.host.shutdown();}
 });
 test('Yap verification and native errors prevent all Start clicks',async()=>{
- for(const state of [{mediaReady:true,verification:true},{mediaReady:true,login:true},{mediaReady:true,nativeError:'Yap has restricted this session.'}]){
+ for(const state of [{mediaReady:true,verification:true},{mediaReady:true,login:true},{mediaReady:true,genderRequired:true},{mediaReady:true,nativeError:'Yap has restricted this session.'}]){
   const f=fixture(state);try{await assert.rejects(f.host.start(0),/^Error: Yap/);assert.deepEqual(f.calls,[]);}finally{await f.host.shutdown();}
  }
+});
+test('changing Yap gender requires closing the existing session first',async()=>{
+ const f=fixture();f.slot.selfGender='male';try{await assert.rejects(f.host.start(0,{selfGender:'female'}),/Disconnect this side/);assert.deepEqual(f.calls,[]);}finally{await f.host.shutdown();}
 });
 test('already searching or connected Yap never receives another Start',async()=>{
  for(const state of [{mediaReady:true,searching:true},{mediaReady:true,connected:true}]){const f=fixture(state);try{await f.host.start(0);assert.deepEqual(f.calls,[]);}finally{await f.host.shutdown();}}

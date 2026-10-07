@@ -56,7 +56,7 @@ export class AudioHost{
     await this.loaded;
     if(!this.tokens[i])throw Error('Enter this side’s voice authToken first.');
     let s=this.slots[i];
-    if(s?.stopped)throw Error('Audio session stopped after failure. Apply a fresh token before testing again.');
+    if(s?.stopped)throw Error('Audio session stopped after failure. Disconnect this side before testing again. Your saved token has been retained.');
     if(s?.prepared)return s;
 
     if(!s){
