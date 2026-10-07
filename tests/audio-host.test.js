@@ -38,6 +38,14 @@ test('failed document-start seeding never rewrites the token after the page star
   assert.equal(fallbackWrites,0);
  }finally{await f.done();}
 });
+test('a delayed bootstrap is rejected even when a later storage read matches',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['fixture-token',null];let reads=0;
+  f.host.slots[0].bootstrap={ok:true,reason:'extension-storage-retry',phase:'poll:1'};
+  f.host.slots[0].page.waitForFunction=async()=>reads++;
+  await assert.rejects(f.host.prepare(0),/before startup/);assert.equal(reads,0);
+ }finally{await f.done();}
+});
 test('a browser is closed when context setup fails before its slot is assigned',async()=>{
  const f=await fixture();try{
   f.host.tokens=['launch-fixture-token',null];f.host.slots[0]=null;
@@ -113,7 +121,7 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
   const initCalls=[];
   const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(typeof initCalls[1].input.content,'string');return page;}};
-  f.host.launch=async()=>({newContext:async options=>{assert.equal('storageState' in options,false);assert.deepEqual(options.viewport,{width:1920,height:1080});assert.equal(options.isMobile,false);assert.equal(options.hasTouch,false);return context;},close:async()=>{}});
+  f.host.launch=async()=>({newContext:async options=>{assert.equal(JSON.parse(options.storageState.origins[0].localStorage[0].value).user.authToken,'logging-fixture-token');assert.equal(options.storageState.origins[0].origin,'https://nekto-me.kz');assert.deepEqual(options.viewport,{width:1920,height:1080});assert.equal(options.isMobile,false);assert.equal(options.hasTouch,false);return context;},close:async()=>{}});
   console.log=value=>logs.push(String(value));
   await f.host.prepare(0);
   const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/?token=private-query-value';

@@ -15,14 +15,26 @@ export class YapVideoHost extends VideoHost{
   if(this.slots[i])return;
   const browser=await this.getBrowser();
   const context=await browser.newContext({viewport:{width:1280,height:720}});
-  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,cache:[],cacheBytes:0,generation:null,error:''};
+  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,cache:[],cacheBytes:0,generation:null,error:'',network:{httpErrors:[],failedRequests:0,sockets:0,socketErrors:0,sentFrames:0,receivedFrames:0}};
   this.slots[i]=slot;
   try{
    await context.grantPermissions(['camera','microphone'],{origin:'https://yap.chat'});
    await context.exposeBinding('__videoSegment',async({frame},segment)=>{if(this.slots[i]===slot&&frame===this.frame(slot))await this.segment(i,slot,segment);});
-   await context.addInitScript(()=>{window.__videoHostConfig={width:320,provider:'yap'};});
-   await context.addInitScript({content:injection});
+   // Multiple init scripts have no guaranteed ordering. Configure the adapter
+   // in the same script, before it allocates its media streams.
+   await context.addInitScript({content:"window.__videoHostConfig={width:320,provider:'yap'};\n"+injection});
    slot.page=await context.newPage();slot.pages.push(slot.page);
+   slot.page.on('requestfailed',()=>{if(this.slots[i]===slot)slot.network.failedRequests++;});
+   slot.page.on('response',response=>{
+    if(this.slots[i]!==slot||response.status()<400)return;
+    try{const u=new URL(response.url());if(u.origin==='https://yap.chat'&&u.pathname.startsWith('/api/'))slot.network.httpErrors=[...slot.network.httpErrors,{status:response.status(),endpoint:u.pathname==='/api/socket-token'?'socket-token':u.pathname==='/api/country'?'country':'other-api'}].slice(-8);}catch{}
+   });
+   slot.page.on('websocket',socket=>{
+    slot.network.sockets++;
+    socket.on('framesent',()=>slot.network.sentFrames++);
+    socket.on('framereceived',()=>slot.network.receivedFrames++);
+    socket.on('socketerror',()=>slot.network.socketErrors++);
+   });
    slot.page.on('dialog',d=>d.dismiss().catch(()=>{}));
    slot.page.on('popup',p=>p.close().catch(()=>{}));
    slot.page.on('crash',()=>{slot.crashed=true;slot.connected=false;slot.status='error';slot.error='Yap video browser ran out of memory.';this.enabled=false;});
@@ -40,20 +52,24 @@ export class YapVideoHost extends VideoHost{
   return {frame,state};
  }
  async prepareSession(i){await this.open(i);await this.currentClient(this.slots[i]);}
+ checkNative(state){
+  if(state.verification)throw Error('Yap requires verification.');
+  if(state.login)throw Error('Yap requires sign-in before starting this session.');
+  if(state.nativeError)throw Error(state.nativeError);
+ }
  async start(i){
   if(this.slots[i]?.crashed)await this.close(i);
   await this.open(i);const slot=this.slots[i];slot.busy=true;slot.startFailed=false;let stage='wait-media-runtime';
   try{
    let {state}=await this.currentClient(slot);
-   if(state.verification)throw Error('Yap requires verification.');
-   if(state.nativeError)throw Error(state.nativeError);
-   if(state.connected||state.searching)return;
+   this.checkNative(state);
+   if(state.connected||state.searching){slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
    stage='wait-entry';
    // The media adapter can be ready before React mounts/hydrates Yap's UI.
    // Wait for a native handler, then click the entry only once.
    await slot.page.waitForFunction(()=>{
     const state=window.__videoHost?.status();
-    if(state?.verification||state?.nativeError)return true;
+    if(state?.verification||state?.login||state?.nativeError)return true;
     return [...document.querySelectorAll('button')].some(button=>{
      const text=(button.innerText||'').replace(/\s+/g,' ').trim();
      if(!/^(?:Start Random Video Chat|(?:▶\s*)?START)$/i.test(text)||button.disabled||!button.getClientRects().length)return false;
@@ -62,22 +78,33 @@ export class YapVideoHost extends VideoHost{
     });
    },null,{timeout:30000});
    ({state}=await this.currentClient(slot));
-   if(state.verification)throw Error('Yap requires verification.');
-   if(state.nativeError)throw Error(state.nativeError);
-   const landing=slot.page.getByRole('button',{name:'Start Random Video Chat',exact:true});
+   this.checkNative(state);
+   const landing=slot.page.getByRole('button',{name:/^Start Random Video Chat$/i});
    stage='enter-video-client';
    if(await landing.isVisible())await landing.click({timeout:5000});
    // Only the normal Start button; never Adult, Next, sign-in or a challenge.
    const start=slot.page.getByRole('button',{name:/^(?:▶\s*)?START$/i}).filter({visible:true}).first();
    stage='wait-native-start';
    await start.waitFor({state:'visible',timeout:30000});
+   await slot.page.waitForFunction(()=>{
+    const state=window.__videoHost?.status();
+    if(state?.verification||state?.login||state?.nativeError)return true;
+    return [...document.querySelectorAll('button')].some(button=>{
+     if(!/^(?:▶\s*)?START$/i.test((button.innerText||'').replace(/\s+/g,' ').trim())||button.disabled||!button.getClientRects().length)return false;
+     const key=Object.keys(button).find(k=>k.startsWith('__reactProps$'));
+     return typeof button.onclick==='function'||typeof button[key]?.onClick==='function';
+    });
+   },null,{timeout:30000});
    ({state}=await this.currentClient(slot));
-   if(state.verification)throw Error('Yap requires verification.');
-   if(state.nativeError)throw Error(state.nativeError);
+   this.checkNative(state);
    stage='click-native-start';
    await start.click({timeout:5000});
    slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';
-  }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
+   stage='confirm-native-search';
+   await slot.page.waitForFunction(()=>{const s=window.__videoHost?.status();return !!(s?.connected||s?.searching||s?.login||s?.verification||s?.nativeError);},null,{timeout:15000});
+   ({state}=await this.currentClient(slot));this.checkNative(state);
+   slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;
+  }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:stage==='confirm-native-search'?'Yap did not confirm starting the search. Disconnect this side before retrying.':'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':/sign-in/.test(slot.error)?'login':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
   finally{slot.busy=false;}
  }
  async tick(){await super.tick();for(const s of this.slots)if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';}

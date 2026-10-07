@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {AudioHost} from '../audio-host.js';
 
 // Exact storage operation from the uploaded prime extension, with a fixture
 // credential. Every web request is fulfilled locally; no Nekto connection.
@@ -45,4 +46,30 @@ test('actual MV3 isolated-world extension and init script seed identical first-s
   assert.deepEqual(results[0],results[1]);
   assert.deepEqual(results[0],{user:{authToken:'fixture-voice-token',volume:37},chat:{lastStartDialogTime:123}});
  }finally{await context?.close();await rm(directory,{recursive:true,force:true});}
+});
+test('AudioHost seeds each actual Chromium context before its first page and iframe script',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'voice-context-'));
+ const browsers=[];
+ const host=new AudioHost({data:directory,graph:{ensure:async()=>{},browserEnv:()=>({...process.env}),close:async()=>{}},launch:async options=>{
+  const browser=await chromium.launch(options);browsers.push(browser);
+  const createContext=browser.newContext.bind(browser);
+  browser.newContext=async config=>{
+   const context=await createContext(config);
+   await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><script>window.firstScriptToken=JSON.parse(localStorage.getItem('storage_audio_v2')||'{}')?.user?.authToken;</script><div id="app"></div><script>document.getElementById('app').__vue__={$store:{state:{user:{authToken:window.firstScriptToken,tokenId:123},system:{isAuth:true,socketConnected:true},chat:{}}}};</script>`+(new URL(route.request().url()).pathname==='/audiochat'?'<iframe src="/frame"></iframe>':'')}));
+   return context;
+  };
+  return browser;
+ }});
+ clearInterval(host.timer);
+ try{
+  await host.loaded;host.tokens=['fixture-token-A','fixture-token-B'];
+  for(const side of [0,1]){
+   const slot=await host.prepare(side);
+   assert.equal(slot.context.browser(),browsers[side]);assert.equal(slot.page.context(),slot.context);
+   assert.equal(slot.bootstrap.phase,'document-start');assert.equal(slot.authorization.liveTokenMatches,true);
+   await slot.page.waitForFunction(()=>document.querySelector('iframe')?.contentWindow?.firstScriptToken===window.firstScriptToken);
+   for(const frame of slot.page.frames())assert.equal(await frame.evaluate(()=>window.firstScriptToken),host.tokens[side]);
+  }
+  assert.notEqual(host.slots[0].context,host.slots[1].context);
+ }finally{await host.shutdown();await rm(directory,{recursive:true,force:true});}
 });

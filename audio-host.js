@@ -6,6 +6,7 @@ import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
 import {primeVoiceStorage} from './voice-bootstrap.js';
+import {voiceStorageState} from './voice-storage-state.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -71,6 +72,7 @@ export class AudioHost{
 
       try{
       const context=await browser.newContext({
+        storageState:voiceStorageState(this.tokens[i]),
         viewport:{width:1920,height:1080},
         isMobile:false,
         hasTouch:false,
@@ -141,7 +143,7 @@ page.on("websocket", ws => {
       this.slots[i]=s;
       this.screens[i]=null;
       this.recordAttempt(i,s);
-      console.log(JSON.stringify({event:'audio_token_init_registered',slot:i?'B':'A',attemptId:s.epoch}));
+      console.log(JSON.stringify({event:'audio_token_init_registered',slot:i?'B':'A',attemptId:s.epoch,storageOrigin:'https://nekto-me.kz',initialization:'context-storage-before-page',browserVersion:typeof browser.version==='function'?browser.version():null}));
 
       page.on('dialog',d=>d.dismiss().catch(()=>{}));
       page.on('popup',p=>p.close().catch(()=>{}));
@@ -176,7 +178,7 @@ page.on("websocket", ws => {
     // late to establish which token the site's client loaded at startup.
     const bootstrap=s.bootstrap||{ok:false,reason:'extension-init-not-verified'};
 
-    if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
+    if(!bootstrap.ok||bootstrap.phase&&bootstrap.phase!=='document-start')throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
 
     s.stage='await-native-client';
     try{await s.page.waitForFunction(voiceReady,null,{timeout:20000});}
@@ -377,7 +379,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
   }
 
   recordDiagnostics(i,s,entries=[]){

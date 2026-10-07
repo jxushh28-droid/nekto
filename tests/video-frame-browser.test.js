@@ -22,15 +22,28 @@ test('Yap uses isolated main pages and native Start with no credential injection
   assert.equal(options.storageState,undefined);
   const context=await browser.newContext(options);contexts.push(context);
   await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><div>Loading...</div><script>
-   window.starts=0;window.entries=0;setTimeout(()=>{document.body.innerHTML='<button id="entry">Start Random Video Chat</button>';setTimeout(()=>{document.getElementById('entry').onclick=()=>{window.entries++;document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;};};},200);},200);
+   window.starts=0;window.entries=0;setTimeout(()=>{document.body.innerHTML='<button id="entry">Start Random Video Chat</button>';setTimeout(()=>{document.getElementById('entry').onclick=()=>{window.entries++;document.body.innerHTML='<video muted autoplay></video><button id="normal">▶ START</button><button>Start Adult Chat</button>';document.querySelector('video').muted=true;setTimeout(()=>{document.getElementById('normal').onclick=async()=>{window.starts++;window.stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});document.querySelector('video').srcObject=window.stream;const status=document.createElement('div');status.textContent='Searching for stranger...';document.body.append(status);};},200);};},200);},200);
   </script>`}));
   return context;
  }})});
  try{
   await host.start(0);await host.start(1);
   assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
-  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(host.frame(slot),slot.page.mainFrame());assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
+  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
  }finally{await host.shutdown();await browser.close();}
+});
+test('Yap reads leaf status messages and distinguishes sign-in and media failure from verification',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<button>Sign in</button><div id="notice">Connecting</div><div hidden>Login Required</div>'}));
+  const page=await context.newPage();await page.goto('https://yap.chat/video');
+  let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.searching,false);assert.equal(state.login,false);assert.equal(state.verification,false);
+  await page.locator('#notice').evaluate(e=>{e.textContent='Finding someone';});assert.equal((await page.evaluate(()=>window.__videoHost.status())).searching,true);
+  await page.locator('#notice').evaluate(e=>{e.textContent='Sign in first';});state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.login,true);assert.equal(state.verification,false);
+  await page.locator('#notice').evaluate(e=>{e.textContent='Camera/Microphone permissions are required to continue';});state=await page.evaluate(()=>window.__videoHost.status());assert.match(state.nativeError,/camera or microphone/);assert.equal(state.login,false);
+ }finally{await context.close();await browser.close();}
 });
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
  const data=await mkdtemp(join(tmpdir(),'video-frame-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
