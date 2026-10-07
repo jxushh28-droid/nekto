@@ -11,6 +11,49 @@ test('authorized native client is ready without the optional isFirstLoaded flag'
  state.system.isAuth=false;assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),false);
 });
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
+test('manual preparation seeds before navigation and never confirms authorization or clicks Start',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['manual-fixture-token',null];f.host.slots[0]=null;f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
+  const order=[],page=new EventEmitter();page.goto=async()=>order.push('navigate');page.evaluate=async()=>({ok:true,reason:'extension-document-start'});
+  page.waitForFunction=()=>{throw Error('manual mode must not wait for authorization');};page.locator=()=>{throw Error('manual mode must not click Start');};
+  const context={grantPermissions:async()=>{},addInitScript:async input=>order.push(input===primeVoiceStorage?'seed':'runtime'),newPage:async()=>page};
+  f.host.launch=async()=>({newContext:async()=>context,close:async()=>{}});
+  await f.host.openManual(0);assert.deepEqual(order,['seed','runtime','navigate']);assert.equal(f.host.slots[0].manual,true);assert.equal(f.host.status().slots[0].interactive,true);assert.equal(f.host.slots[0].prepared,false);
+  await assert.rejects(f.host.start(0),/manual mode/);
+ }finally{await f.done();}
+});
+test('manual token opening uses one side and saves the other token without starting a call',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['old-A','retained-B'];const opened=[];f.host.openManual=async i=>opened.push(i);f.host.start=async()=>{throw Error('no automatic Start');};
+  const result=await f.host.applySingle(0,'manual-A',{manual:true});assert.equal(result.operation,'manual');assert.deepEqual(opened,[0]);assert.deepEqual(await loadAudioTokens(f.host.data),['manual-A','retained-B']);assert.equal(f.host.requested,false);
+ }finally{await f.done();}
+});
+test('manual native prompts and disconnect stay visible without automatic retries',async()=>{
+ const f=await fixture();try{
+  f.host.slots[0].manual=true;let closed=0;f.host.slots[0].browser.close=async()=>closed++;
+  for(const status of ['verification','attention','blocked','ended']){f.states[0]={status,connected:false,ended:status==='ended'};await f.host.tick();assert.equal(f.host.slots[0].status,status);assert.equal(f.host.slots[0].stopped,undefined);}
+  assert.equal(closed,0);
+ }finally{await f.done();}
+});
+test('screen input maps displayed coordinates and rejects old sessions, invalid input and automatic mode',async()=>{
+ const f=await fixture();try{
+  const s=f.host.slots[0],events=[];s.manual=true;s.page.viewportSize=()=>({width:1920,height:1080});
+  s.page.mouse={click:async(x,y)=>events.push(['click',x,y]),move:async(x,y)=>events.push(['move',x,y]),wheel:async(x,y)=>events.push(['wheel',x,y])};s.page.keyboard={insertText:async text=>events.push(['text',text]),press:async key=>events.push(['key',key])};
+  const send=input=>f.host.control(0,{attemptId:'0',...input});
+  await send({type:'click',x:.25,y:.75});await send({type:'wheel',x:.5,y:.5,deltaY:250});await send({type:'text',text:'Привет'});await send({type:'key',key:'Enter'});
+  assert.deepEqual(events,[['click',480,810],['move',960,540],['wheel',0,250],['text','Привет'],['key','Enter']]);
+  const n=events.length;await assert.rejects(f.host.control(0,{attemptId:'old',type:'click',x:.5,y:.5}),/earlier session/);
+  for(const input of [{type:'click',x:2,y:0},{type:'wheel',x:.5,y:.5,deltaY:2000},{type:'text',text:'x'.repeat(2001)},{type:'key',key:'F12'},{type:'evaluate',text:'alert(1)'}])await assert.rejects(send(input),/Audio:/);
+  assert.equal(events.length,n);assert.equal(s.controlBusy,false);s.manual=false;await assert.rejects(send({type:'key',key:'Enter'}),/manually/);
+ }finally{await f.done();}
+});
+test('screen input cannot overlap another input or alter a replacement session',async()=>{
+ const f=await fixture();try{
+  const s=f.host.slots[0];s.manual=true;let finish;s.page.keyboard={insertText:()=>new Promise(r=>finish=r)};
+  const first=f.host.control(0,{attemptId:'0',type:'text',text:'fixture'});await assert.rejects(f.host.control(0,{attemptId:'0',type:'text',text:'second'}),/busy/);
+  const replacement={...s,epoch:'replacement',controlBusy:false};f.host.slots[0]=replacement;finish();await assert.rejects(first,/closed while sending/);assert.equal(replacement.controlBusy,false);
+ }finally{await f.done();}
+});
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
   f.host.tokens=['diagnostic-fixture-token',null];let calls=0;
