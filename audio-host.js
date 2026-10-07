@@ -51,7 +51,7 @@ export class AudioHost{
     return /^(Nekto|Enter|Use|Audio|Close)/.test(message)?message.slice(0,200):'Audio operation failed. Disconnect this side and try again.';
   }
 
-  async prepare(i,{manual=false}={}){
+  async prepare(i){
     await this.loaded;
     if(!this.tokens[i])throw Error('Enter this side’s voice authToken first.');
     let s=this.slots[i];
@@ -137,7 +137,7 @@ page.on("websocket", ws => {
   ws.on("socketerror", () => log("error"));
   ws.on("close", () => log("closed"));
 });
-      s={browser,context,page,bootstrap,manual,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
+      s={browser,context,page,bootstrap,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
       this.slots[i]=s;
       this.screens[i]=null;
       this.recordAttempt(i,s);
@@ -177,9 +177,6 @@ page.on("websocket", ws => {
     const bootstrap=s.bootstrap||{ok:false,reason:'extension-init-not-verified'};
 
     if(!bootstrap.ok)throw Error('Nekto voice token could not be saved before startup: '+bootstrap.reason);
-
-    // Manual testing leaves native authorization, prompts and Start to the user.
-    if(manual){s.stage='manual-control';return s;}
 
     s.stage='await-native-client';
     try{await s.page.waitForFunction(voiceReady,null,{timeout:20000});}
@@ -264,7 +261,6 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   async start(i){
-    if(this.slots[i]?.manual)throw Error('Audio manual mode: use Start inside the native screen.');
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
     this.ops.add(i);
     this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare',startedAt:Date.now()};
@@ -335,7 +331,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     return this.connectBoth();
   }
 
-  async applySingle(i,token,{startCall=true,manual=false}={}){
+  async applySingle(i,token,{startCall=true}={}){
     if(i!==0&&i!==1)throw Error('Invalid audio side.');
     if(typeof token!=='string'||!token.trim())throw Error('Enter this side’s voice authToken first.');
     if(this.setup||this.ops.size)throw Error('Audio session is busy.');
@@ -353,51 +349,11 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       this.setup=false;
     }
     try{
-      if(manual)await this.openManual(i);else if(startCall)await this.start(i);else await this.checkAuthorization(i);
-      return {ok:true,operation:manual?'manual':startCall?'call':'authorization',results:[{slot:i,ok:true}]};
+      if(startCall)await this.start(i);else await this.checkAuthorization(i);
+      return {ok:true,operation:startCall?'call':'authorization',results:[{slot:i,ok:true}]};
     }catch(e){
       return {ok:false,results:[{slot:i,ok:false,error:this.error(e)}]};
     }
-  }
-
-  async openManual(i){
-    if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
-    this.ops.add(i);this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare'};
-    try{const s=await this.prepare(i,{manual:true});this.recordAttempt(i,s);}
-    catch(e){const s=this.slots[i];if(s&&!s.stopped){s.error=this.error(e);s.status='error';await this.stopFailed(i,s);}throw Error(this.error(e));}
-    finally{this.ops.delete(i);}
-  }
-
-  async control(i,input){
-    const s=this.slots[i];
-    if(!s||s.stopped||s.crashed||!s.manual)throw Error('Audio: open this side manually before controlling its screen.');
-    if(input?.attemptId!==s.epoch)throw Error('Audio: this screen belongs to an earlier session. Wait for the current screen.');
-    if(this.setup||this.ops.has(i)||s.controlBusy)throw Error('Audio session is busy.');
-    const point=()=>{
-      if(!Number.isFinite(input.x)||!Number.isFinite(input.y)||input.x<0||input.x>1||input.y<0||input.y>1)throw Error('Audio: invalid screen coordinates.');
-      const viewport=s.page.viewportSize();
-      return {x:Math.min(viewport.width-1,input.x*viewport.width),y:Math.min(viewport.height-1,input.y*viewport.height)};
-    };
-    const keys=new Set(['Enter','Tab','Backspace','Delete','ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown','Escape','Space']);
-    s.controlBusy=true;
-    try{
-      if(input.type==='click'){
-        const p=point();await s.page.mouse.click(p.x,p.y,{button:'left',timeout:3000});
-      }else if(input.type==='wheel'){
-        const p=point();
-        if(!Number.isFinite(input.deltaY)||Math.abs(input.deltaY)>1600)throw Error('Audio: invalid scroll distance.');
-        await s.page.mouse.move(p.x,p.y);await s.page.mouse.wheel(0,input.deltaY);
-      }else if(input.type==='text'){
-        if(typeof input.text!=='string'||input.text.length>2000||!input.text.length)throw Error('Audio: enter at most 2000 characters.');
-        await s.page.keyboard.insertText(input.text);
-      }else if(input.type==='key'){
-        if(!keys.has(input.key)&&!['Control+a','Shift+Tab','Control+ArrowLeft','Control+ArrowRight','Control+Home','Control+End'].includes(input.key))throw Error('Audio: unsupported key.');
-        await s.page.keyboard.press(input.key);
-      }else throw Error('Audio: unsupported screen input.');
-      if(this.slots[i]!==s)throw Error('Audio session closed while sending input.');
-      this.screens[i]=null;
-      return {ok:true};
-    }finally{s.controlBusy=false;}
   }
 
   async checkAuthorization(i){
@@ -439,14 +395,14 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     try{
       for(let i=0;i<2;i++){
         const s=this.slots[i];
-        if(!s||this.ops.has(i)||s.controlBusy||s.crashed||s.stopped)continue;
+        if(!s||this.ops.has(i)||s.crashed||s.stopped)continue;
         try{
           const state=await this.state(s);
           if(this.setup)return;
           if(!state||this.slots[i]!==s||this.ops.has(i))continue;
           this.recordDiagnostics(i,s,state.diagnostics);
           this.recordNativeState(s,state);
-          if(state.ended&&!s.manual){await this.close(i);continue;}
+          if(state.ended){await this.close(i);continue;}
           if(s.operationError&&!state.connected&&!['verification','blocked','attention'].includes(state.status)){
             state.status='error';
             state.detail=s.operationError;
@@ -454,7 +410,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           if(s.status!==state.status)
             console.log(JSON.stringify({event:'audio_session_status',slot:i?'B':'A',status:state.status,authenticated:state.authenticated,socketConnected:state.socketConnected}));
           Object.assign(s,{status:state.status,connected:state.connected,error:state.detail||''});
-          if(!s.manual&&['verification','blocked','attention'].includes(state.status))await this.stopFailed(i,s);
+          if(['verification','blocked','attention'].includes(state.status))await this.stopFailed(i,s);
         }catch(e){
           if(this.slots[i]!==s||this.setup||this.ops.has(i))continue;
           s.status='error';
@@ -502,8 +458,6 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         open:!!s&&!s.stopped,
         closable:!!s,
         stopped:!!s?.stopped,
-        manual:!!s?.manual,
-        interactive:!!s?.manual&&!s.stopped&&!s.crashed&&!this.setup&&!this.ops.has(i),
         attemptId:s?.epoch||null,
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
