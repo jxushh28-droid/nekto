@@ -113,7 +113,7 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
   const initCalls=[];
   const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(typeof initCalls[1].input.content,'string');return page;}};
-  f.host.launch=async()=>({newContext:async options=>{assert.equal('storageState' in options,false);return context;},close:async()=>{}});
+  f.host.launch=async()=>({newContext:async options=>{assert.equal('storageState' in options,false);assert.deepEqual(options.viewport,{width:1920,height:1080});assert.equal(options.isMobile,false);assert.equal(options.hasTouch,false);return context;},close:async()=>{}});
   console.log=value=>logs.push(String(value));
   await f.host.prepare(0);
   const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/?token=private-query-value';

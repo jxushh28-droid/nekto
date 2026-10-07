@@ -71,7 +71,9 @@ export class AudioHost{
 
       try{
       const context=await browser.newContext({
-        viewport:{width:420,height:760},
+        viewport:{width:1920,height:1080},
+        isMobile:false,
+        hasTouch:false,
         locale:'ru-RU'
       });
 
