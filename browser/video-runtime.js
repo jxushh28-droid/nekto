@@ -25,25 +25,39 @@
  function setRemote(stream){if(remote===stream&&(!stream?.getAudioTracks().length||remoteSource))return;if(remoteSource){remoteSource.disconnect();remoteSource=null;}remote=stream;if(stream?.getAudioTracks().length){remoteSource=audio.createMediaStreamSource(stream);remoteSource.connect(remoteAudio);}if(stream)startRecording();else stopRecording();}
  if(NativeRTC){const WrappedRTC=class extends NativeRTC{constructor(...args){super(...args);peers.add(this);this.addEventListener('track',e=>{ended=false;if(e.streams?.[0])setRemote(e.streams[0]);else if(e.track){const stream=remote||new MediaStream();if(!stream.getTracks().includes(e.track))stream.addTrack(e.track);setRemote(stream);}});const changed=()=>{if(peerLive(this)&&!recorder)startRecording();if(['closed','failed','disconnected'].includes(this.connectionState)||['closed','failed','disconnected'].includes(this.iceConnectionState)){if(![...peers].some(peerLive)){if(remoteWasConnected)ended=true;setRemote(null);gain.gain.value=0;}}};this.addEventListener('connectionstatechange',changed);this.addEventListener('iceconnectionstatechange',changed);}};window.RTCPeerConnection=WrappedRTC;if(window.webkitRTCPeerConnection===NativeRTC)window.webkitRTCPeerConnection=WrappedRTC;}
  function draw(ctx,video){ctx.fillStyle='#000000';ctx.fillRect(0,0,width,height);if(video?.readyState>=2)ctx.drawImage(video,0,0,width,height);}
+ function yapClientState(){
+  // Read only the native chat component's existing public state. Never copy
+  // its socket, user identity, messages or authentication data into diagnostics.
+  for(const element of document.querySelectorAll('button,video')){
+   const key=Object.keys(element).find(k=>k.startsWith('__reactFiber$'));let fiber=element[key];
+   for(let depth=0;fiber&&depth<40;depth++,fiber=fiber.return){
+    const props=fiber.memoizedProps;
+    if(typeof props?.onStart!=='function'||!['idle','searching','connecting','inCall','stopped'].includes(props.status))continue;
+    return {found:true,status:props.status,socketConnected:props.socket?.connected===true,matchKind:props.currentMatch?.type==='user'?'live':props.currentMatch?.type==='bot'?'playback':null};
+   }
+  }
+  return {found:false,status:null,socketConnected:false,matchKind:null};
+ }
  const remoteView=document.createElement('video');remoteView.autoplay=true;remoteView.muted=true;remoteView.playsInline=true;
  const renderTimer=setInterval(()=>{mount();if(fixture){const ctx=fixture.canvas.getContext('2d');ctx.fillStyle=fixture.color;ctx.fillRect(0,0,640,360);}const siteVideo=siteRemoteVideo();if(!fixture&&siteVideo?.srcObject&&siteVideo.srcObject!==remote)setRemote(siteVideo.srcObject);const needPreview=!!fixture||previewRequested||(enabled&&otherConnected),nativePreview=siteVideo?.srcObject===remote&&siteVideo.readyState>=2;const fallback=needPreview&&!nativePreview?remote:null;if(remoteView.srcObject!==fallback){remoteView.srcObject=fallback;if(fallback)remoteView.play().catch(()=>{});}const live=connected();if(live)remoteWasConnected=true;gain.gain.value=enabled&&otherConnected&&live?1:0;if(needPreview)draw(previewCtx,live?(nativePreview?siteVideo:remoteView):null);draw(outCtx,enabled&&otherConnected&&live?incoming:null);},1000/fps);
  window.__videoHost={
   status(){
    const visible=el=>{if(el.closest('[hidden],[aria-hidden="true"],[inert]'))return false;if(el.checkVisibility&&!el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;const rect=el.getBoundingClientRect();if(!rect.width||!rect.height||rect.bottom<=0||rect.right<=0||rect.top>=innerHeight||rect.left>=innerWidth)return false;for(let node=el;node instanceof Element;node=node.parentElement){const style=getComputedStyle(node);if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return false;}return true;};
    if(yap){
+    const native=yapClientState();
     const texts=[...document.querySelectorAll('button,[role="alert"],[role="dialog"],[role="status"],[aria-live],h1,h2,h3,p,span,div')].filter(visible).filter(e=>!e.children.length||e.matches('button,[role="alert"],[role="dialog"],[role="status"],[aria-live],h1,h2,h3,p')).map(e=>(e.innerText||'').replace(/\s+/g,' ').trim()).filter(t=>t&&t.length<=300);
     const verification=texts.some(t=>/verify (?:that )?you are human|checking your browser|unusual traffic|complete (?:the )?captcha/i.test(t));
     const restricted=texts.some(t=>/^(?:you (?:are|have been) (?:banned|blocked)|your (?:access|session|ip(?: address)?) (?:is|has been) (?:blocked|banned|restricted)|access denied)/i.test(t));
     const cameraError=texts.some(t=>/^(?:camera access denied|microphone access denied|unable to access (?:camera|microphone)|permission denied|camera(?:\/| and )microphone permissions are required|camera and microphone are blocked|your camera isn't working)/i.test(t));
     const login=texts.some(t=>/^(?:login required|sign in first|please (?:log ?in|sign in) (?:with Google )?to start|you (?:need|must) (?:log ?in|sign in) (?:first|to start))/i.test(t));
-    const nativeError=restricted?'Yap has restricted this session.':cameraError?'Yap could not access the hosted camera or microphone.':'';
+    const nativeError=restricted?'Yap has restricted this session.':cameraError?'Yap could not access the hosted camera or microphone.':native.matchKind==='playback'?'Yap matched video playback instead of a live participant. Disconnect this side before starting another search.':'';
     const message=[...document.querySelectorAll('textarea,input[type="text"]')].some(e=>!e.disabled&&visible(e));
     let selfGender=null;try{const value=localStorage.getItem('uhmingle_selected_gender');if(value==='male'||value==='female')selfGender=value;}catch{}
     const genderRequired=!selfGender&&texts.some(t=>/^(?:Who are you\?|Pick your gender to start matching\.)$/i.test(t));
     const local=[...document.querySelectorAll('video')].find(v=>v!==incoming&&v!==siteRemoteVideo()&&v.srcObject?.getTracks?.().length);
     const localVideo={ready:local?.readyState||0,paused:local?.paused??true,tracks:local?.srcObject?.getTracks?.().map(t=>({kind:t.kind,state:t.readyState}))||[]};
     const nativeMediaReady=['audio','video'].every(kind=>localVideo.tracks.some(t=>t.kind===kind&&t.state==='live'));
-    return {connected:connected(),ended,searching:texts.some(t=>/^(?:searching|finding someone|looking for)(?:\b|…|\.\.\.)/i.test(t))||peers.size>0&&texts.some(t=>/^connecting(?:\b|…|\.\.\.)/i.test(t)),nativeError,login,verification,mediaReady:!disposed,nativeMediaReady,localVideo,selfGender,genderRequired,cameraCalls,canSend:message,audioState:audio.state,receiverFailed:player.failed,bridgeEnabled:enabled&&otherConnected,peerStates:[...peers].map(p=>({connection:p.connectionState,ice:p.iceConnectionState})),remoteTracks:remote?.getTracks().map(t=>({kind:t.kind,state:t.readyState}))||[]};
+    return {connected:connected(),ended,searching:['searching','connecting'].includes(native.status)||texts.some(t=>/^(?:searching|finding someone|looking for)(?:\b|…|\.\.\.)/i.test(t))||peers.size>0&&texts.some(t=>/^connecting(?:\b|…|\.\.\.)/i.test(t)),nativeError,login,verification,mediaReady:!disposed,nativeMediaReady,localVideo,selfGender,genderRequired,nativeClientFound:native.found,nativeStatus:native.status,nativeSocketConnected:native.socketConnected,nativeMatchKind:native.matchKind,cameraCalls,canSend:message,audioState:audio.state,receiverFailed:player.failed,bridgeEnabled:enabled&&otherConnected,peerStates:[...peers].map(p=>({connection:p.connectionState,ice:p.iceConnectionState})),remoteTracks:remote?.getTracks().map(t=>({kind:t.kind,state:t.readyState}))||[]};
    }
    const labels=[...document.querySelectorAll('[data-tr]')].filter(visible),texts=labels.map(el=>(el.innerText||'').replace(/\s+/g,' ').trim());
    const restricted=labels.some(el=>el.dataset.tr==='youre-banned')||texts.some(text=>/^(?:you (?:are|have been) banned|your (?:account|access|session|ip(?: address)?) (?:is|has been) (?:banned|blocked|restricted)|access (?:is |has been )?denied|ban expires(?: in|:))/i.test(text));

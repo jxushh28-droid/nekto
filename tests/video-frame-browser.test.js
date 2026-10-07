@@ -47,6 +47,19 @@ test('Yap reads leaf status messages and distinguishes sign-in and media failure
   await page.locator('#notice').evaluate(e=>{e.textContent='Pick your gender to start matching.';});assert.equal((await page.evaluate(()=>window.__videoHost.status())).genderRequired,true);
  }finally{await context.close();await browser.close();}
 });
+test('Yap diagnoses native React session status without exposing socket or identity data',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<button id="native">START</button>'}));
+  const page=await context.newPage();await page.goto('https://yap.chat/video');
+  await page.evaluate(()=>{document.getElementById('native').__reactFiber$fixture={return:{memoizedProps:{onStart(){},status:'searching',socket:{connected:true,auth:{token:'private-fixture-value'}},selfInfo:{userId:'private-fixture-value'},currentMatch:null}}};});
+  let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeClientFound,true);assert.equal(state.nativeSocketConnected,true);assert.equal(state.searching,true);assert.equal(state.nativeStatus,'searching');assert.doesNotMatch(JSON.stringify(state),/private-fixture-value/);
+  await page.evaluate(()=>{const props=document.getElementById('native').__reactFiber$fixture.return.memoizedProps;props.status='inCall';props.currentMatch={type:'bot',videoUrl:'private-fixture-value'};});
+  state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeMatchKind,'playback');assert.equal(state.connected,false);assert.match(state.nativeError,/playback instead of a live participant/);assert.doesNotMatch(JSON.stringify(state),/private-fixture-value/);
+ }finally{await context.close();await browser.close();}
+});
 test('real Chromium follows replaced iframe and clicks the native container when Start text rejects pointer events',async()=>{
  const data=await mkdtemp(join(tmpdir(),'video-frame-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const host=new VideoHost({data,pageUrl:'https://ometv.chat/',getBrowser:async()=>({newContext:async options=>{
