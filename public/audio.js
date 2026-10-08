@@ -25,7 +25,7 @@ async function refreshScreen(i,x){
 const storageSnapshots=[null,null],storagePending=[false,false],storageReadTimes=[0,0];
 function updateStorageView(i){
  const card=$('card'+i),x=snapshot?.slots[i],value=storageSnapshots[i];
- if(value&&(!x?.open||value.runId!==x.attemptId))storageSnapshots[i]=null;
+ if(value&&(!x?.open||value.sessionId!==x.attemptId))storageSnapshots[i]=null;
  const current=storageSnapshots[i],typed=$('token'+(i?'B':'A')).value.trim();
  card.querySelector('.readStorage').disabled=storagePending[i]||!x?.open||x.storageAvailable===false;
  card.querySelector('.openWithoutSearch').disabled=pending||x?.busy;
@@ -51,7 +51,7 @@ async function readStorage(i){
  storagePending[i]=true;storageReadTimes[i]=Date.now();storageSnapshots[i]=null;updateStorageView(i);
  try{
   const result=await api('audio/'+i+'/storage',{epoch});
-  if(snapshot?.slots[i]?.attemptId===epoch&&result.open&&result.runId===epoch&&result.slot===i)storageSnapshots[i]=result;
+  if(snapshot?.slots[i]?.attemptId===epoch&&result.open&&result.sessionId===epoch&&result.slot===i)storageSnapshots[i]=result;
  }catch(e){if(!snapshot?.slots[i]?.busy)fail(e);}finally{storagePending[i]=false;updateStorageView(i);}
 }
 
