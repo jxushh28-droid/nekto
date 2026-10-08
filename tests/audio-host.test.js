@@ -278,3 +278,19 @@ test('screenshot failure cannot prevent browser cleanup',async()=>{const f=await
  let closed=0;f.host.slots[0].page.screenshot=async()=>{throw Error('private renderer detail');};f.host.slots[0].browser.close=async()=>closed++;
  await f.host.stopFailed(0,f.host.slots[0]);assert.equal(closed,1);assert.equal(await f.host.screen(0),null);
  }finally{await f.done();}});
+
+test('applying unchanged tokens retains console-modified pages for single and both-side Start',async()=>{
+ const f=await fixture();try{
+  const original=[...f.host.slots],closed=[],started=[];f.host.tokens=['reuse-fixture-A','reuse-fixture-B'];
+  for(let i=0;i<2;i++){
+   original[i].profileIdentity=f.host.tokens[i];original[i].prepared=true;original[i].page.consoleMarker='operator-page-'+i;
+   original[i].browser.close=async()=>closed.push(i);
+  }
+  f.host.start=async i=>{started.push(i);assert.equal(f.host.slots[i],original[i]);assert.equal(f.host.slots[i].page.consoleMarker,'operator-page-'+i);};
+  assert.equal((await f.host.applySingle(0,'  reuse-fixture-A  ')).ok,true);assert.deepEqual(closed,[]);assert.deepEqual(started,[0]);
+  await f.host.apply(['reuse-fixture-A','reuse-fixture-B'],false);assert.deepEqual(closed,[]);assert.deepEqual(started,[0,0,1]);
+  assert.equal(f.host.slots[0],original[0]);assert.equal(f.host.slots[1],original[1]);
+  f.host.start=async()=>{};
+  await f.host.applySingle(0,'replacement-fixture-A');assert.deepEqual(closed,[0]);assert.equal(f.host.slots[1],original[1]);
+ }finally{await f.done();}
+});

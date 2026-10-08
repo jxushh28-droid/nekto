@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {primeVoiceStorage,applyVoiceStorageToken} from '../voice-bootstrap.js';
 
 function run(saved, options = {}) {
   let value=saved,writes=0,denied=!!options.denied,retries=0;
@@ -49,4 +49,13 @@ test('context storage imports audio credentials once while preserving unrelated 
  const result=voiceStorageState('fixture-token',previous);
  assert.equal(voiceStorageMatches(result,'fixture-token'),true);assert.equal(voiceStorageMatches(previous,'fixture-token'),false);
  const saved=JSON.parse(result.origins[0].localStorage[0].value);assert.equal(saved.user.volume,37);assert.equal(saved.chat.duration,2);assert.equal(result.origins[0].localStorage[1].value,'preserved');assert.equal(result.origins[1].localStorage[0].value,'untouched');
+});
+
+test('operator console storage writer works in the loaded page and preserves other fields',()=>{
+ let value=JSON.stringify({user:{authToken:'old',volume:37},chat:{preference:'preserved'}}),writes=0;
+ const context={location:{origin:'https://nekto-me.kz'},document:{addEventListener(){}},localStorage:{getItem:()=>value,setItem:(key,next)=>{assert.equal(key,'storage_audio_v2');writes++;value=next;}}};
+ const run=()=>runInNewContext('('+applyVoiceStorageToken.toString()+')("console-fixture-token")',context);
+ assert.equal(run().ok,true);assert.equal(writes,1);assert.equal(JSON.parse(value).user.volume,37);assert.equal(JSON.parse(value).chat.preference,'preserved');
+ assert.equal(run().changed,false);assert.equal(writes,1);assert.equal(JSON.stringify(run()).includes('console-fixture-token'),false);
+ context.location.origin='https://unrelated.test';assert.equal(run().ok,false);assert.equal(writes,1);
 });

@@ -2,6 +2,26 @@
 // always-on content script would: whenever anything replaces it, re-write the
 // token back into both localStorage and the live client store so browser A
 // never drifts off the configured token. Runs from document-start onward.
+// Same idempotent storage write used by the operator's console snippet.
+// Runs in the selected existing page immediately before its Start click.
+export function applyVoiceStorageToken(token){
+ if(location.origin!=='https://nekto-me.kz'||typeof token!=='string'||!token)return {ok:false,changed:false,savedTokenMatches:false};
+ const KEY='storage_audio_v2';let changed=false;
+ const write=()=>{
+  try{
+   const saved=JSON.parse(localStorage.getItem(KEY)||'{}')||{};
+   if(saved?.user?.authToken===token)return true;
+   if(typeof saved!=='object'||Array.isArray(saved)||saved.user!=null&&(typeof saved.user!=='object'||Array.isArray(saved.user)))return false;
+   saved.user=saved.user||{};saved.user.authToken=token;
+   localStorage.setItem(KEY,JSON.stringify(saved));changed=true;
+   return JSON.parse(localStorage.getItem(KEY)||'{}')?.user?.authToken===token;
+  }catch{return false;}
+ };
+ const ok=write();
+ if(!ok)document.addEventListener('readystatechange',write,{once:true});
+ return {ok,changed,savedTokenMatches:ok};
+}
+
 export function pinVoiceToken(token) {
   if (location.origin !== 'https://nekto-me.kz') return;
   if (typeof token !== 'string' || !token) return;
