@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
-import {primeVoiceStorage,applyVoiceStorageToken} from '../voice-bootstrap.js';
+import {primeVoiceStorage,applyVoiceStorageToken,observeVoiceStorage} from '../voice-bootstrap.js';
 
 function run(saved, options = {}) {
   let value=saved,writes=0,denied=!!options.denied,retries=0;
@@ -58,4 +58,15 @@ test('operator console storage writer works in the loaded page and preserves oth
  assert.equal(run().ok,true);assert.equal(writes,1);assert.equal(JSON.parse(value).user.volume,37);assert.equal(JSON.parse(value).chat.preference,'preserved');
  assert.equal(run().changed,false);assert.equal(writes,1);assert.equal(JSON.stringify(run()).includes('console-fixture-token'),false);
  context.location.origin='https://unrelated.test';assert.equal(run().ok,false);assert.equal(writes,1);
+});
+
+test('reload bootstrap observes the latest console write without restoring an old token or changing Vue',()=>{
+ let value=JSON.stringify({user:{authToken:'first-fixture-token'}}),writes=0;
+ const user={authToken:'native-live-fixture'},context={location:{origin:'https://nekto-me.kz'},window:{},localStorage:{getItem:()=>value,setItem:()=>writes++}};
+ const run=()=>runInNewContext('('+observeVoiceStorage.toString()+')()',context);
+ run();assert.equal(context.window.__voiceTokenBootstrap.ok,true);
+ value=JSON.stringify({user:{authToken:'console-replacement-fixture'}});run();
+ assert.equal(context.window.__voiceTokenBootstrap.ok,true);assert.equal(writes,0);assert.equal(user.authToken,'native-live-fixture');
+ assert.equal(JSON.parse(value).user.authToken,'console-replacement-fixture');
+ value='invalid';run();assert.equal(context.window.__voiceTokenBootstrap.ok,false);assert.equal(writes,0);
 });

@@ -10,6 +10,16 @@ import {inspectVoiceToken,readVoiceStorageToken} from '../voice-inspection.js';
 import {applyVoiceStorageToken} from '../voice-bootstrap.js';
 
 const matchingToken={clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,authenticated:true,socketConnected:true,identityPresent:true,captcha:false,hcaptcha:false,restricted:false,registrationError:0};
+
+test('field application rejects an actual storage mismatch even when the writer reports success',async()=>{
+ const f=await fixture();try{
+  const {host,s}=f;
+  s.page.evaluate=async fn=>fn===applyVoiceStorageToken?{ok:true,savedTokenMatches:true}:fn===readVoiceStorageToken?{storageReadable:true,token:'different-native-fixture',origin:'https://nekto-me.kz',key:'storage_audio_v2',path:'user.authToken'}:matchingToken;
+  await assert.rejects(host.writeCurrentToken(0,s,s.profileIdentity,'before-start'),/localStorage does not match/);
+  assert.equal(host.storageReceipts.get(s).matchesInput,false);
+  assert.equal(JSON.stringify(host.status()).includes('different-native-fixture'),false);
+ }finally{await f.done();}
+});
 async function fixture(){
  const dir=await mkdtemp(join(tmpdir(),'native-input-')),actions=[],routes=[];
  const states=[{status:'connected',connected:true},{status:'connected',connected:true}];
@@ -17,7 +27,7 @@ async function fixture(){
  const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;
  host.slots=[0,1].map(i=>({epoch:'fixture-'+i,page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true}));
  const s=host.slots[0];s.profileIdentity='interactive-fixture-token';s.wire={sentTokenMatches:true,registrationSucceeded:true};
- s.page.evaluate=async fn=>fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken}:states[0];
+ s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken}:states[0];
  s.page.url=()=> 'https://nekto-me.kz/audiochat';s.page.viewportSize=()=>({width:1920,height:1080});
  s.page.mouse={click:async(x,y)=>actions.push(['click',x,y]),wheel:async(x,y)=>actions.push(['wheel',x,y])};
  s.page.keyboard={insertText:async text=>actions.push(['text',text]),press:async key=>actions.push(['key',key])};
@@ -62,7 +72,7 @@ test('verification recovery retains identity and requires new consent without an
 test('native controls mute and close on a changed token before sending input',async()=>{
  const f=await fixture();try{
   const {host,s,actions}=f;let closed=0;s.browser.close=async()=>closed++;
-  s.page.evaluate=async fn=>fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
+  s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
   host.requested=true;host.enabled=true;
   await assert.rejects(host.input(0,{epoch:s.epoch,action:'text',text:'fixture'}),/token changed/);
   assert.equal(closed,1);assert.deepEqual(actions,[]);assert.equal(host.enabled,false);assert.equal(f.routes.at(-1),false);assert.equal(s.stopped,true);
@@ -72,7 +82,7 @@ test('Start verifies the token before clicking instead of using a changed identi
  const f=await fixture();try{
   const {host,s,actions}=f;let clicks=0;host.prepare=async()=>s;
   f.states[0]={status:'ready',authenticated:true,socketConnected:true};
-  s.page.evaluate=async fn=>fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
+  s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
   s.page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>clicks++});
   await assert.rejects(host.start(0),/token changed/);assert.equal(clicks,0);assert.deepEqual(actions,[]);assert.equal(s.stopped,true);
   assert.equal(host.status().slots[0].callToken.before.liveTokenMatches,false);
@@ -100,7 +110,7 @@ test('clearing a native check cannot resume forwarding before authorization is c
  const f=await fixture();try{
   f.states[0]={status:'verification',connected:false};await f.host.tick();
   f.states[0]={status:'connected',connected:true};
-  f.s.page.evaluate=async fn=>fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,authenticated:false}:f.states[0];
+  f.s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:f.s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,authenticated:false}:f.states[0];
   await f.host.tick();assert.equal(f.s.paused,true);assert.equal(f.s.connected,false);assert.equal(f.host.enabled,false);assert.equal(f.host.captures[0],null);
  }finally{await f.done();}
 });
