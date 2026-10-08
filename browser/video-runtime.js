@@ -25,6 +25,17 @@
  function setRemote(stream){if(remote===stream&&(!stream?.getAudioTracks().length||remoteSource))return;if(remoteSource){remoteSource.disconnect();remoteSource=null;}remote=stream;if(stream?.getAudioTracks().length){remoteSource=audio.createMediaStreamSource(stream);remoteSource.connect(remoteAudio);}if(stream)startRecording();else stopRecording();}
  if(NativeRTC){const WrappedRTC=class extends NativeRTC{constructor(...args){super(...args);peers.add(this);this.addEventListener('track',e=>{if(!remoteWasConnected)ended=false;if(e.streams?.[0])setRemote(e.streams[0]);else if(e.track){const stream=remote||new MediaStream();if(!stream.getTracks().includes(e.track))stream.addTrack(e.track);setRemote(stream);}});const changed=()=>{if(peerLive(this)&&!recorder)startRecording();if(['closed','failed','disconnected'].includes(this.connectionState)||['closed','failed','disconnected'].includes(this.iceConnectionState)){if(![...peers].some(peerLive)){if(remoteWasConnected)ended=true;setRemote(null);gain.gain.value=0;}}};this.addEventListener('connectionstatechange',changed);this.addEventListener('iceconnectionstatechange',changed);}};window.RTCPeerConnection=WrappedRTC;if(window.webkitRTCPeerConnection===NativeRTC)window.webkitRTCPeerConnection=WrappedRTC;}
  function draw(ctx,video){ctx.fillStyle='#000000';ctx.fillRect(0,0,width,height);if(video?.readyState>=2)ctx.drawImage(video,0,0,width,height);}
+ function drawWaiting(){
+  outCtx.fillStyle='#101820';outCtx.fillRect(0,0,width,height);
+  const phase=Math.floor(performance.now()/125)%8,cx=width/2,cy=height*.36,radius=width*.065;
+  for(let n=0;n<8;n++){
+   const angle=n*Math.PI/4-Math.PI/2,alpha=.18+.82*((n-phase+8)%8)/7;
+   outCtx.fillStyle='rgba(81,211,157,'+alpha+')';outCtx.beginPath();outCtx.arc(cx+Math.cos(angle)*radius,cy+Math.sin(angle)*radius,width*.012,0,Math.PI*2);outCtx.fill();
+  }
+  outCtx.textAlign='center';outCtx.fillStyle='#ffffff';outCtx.font='600 '+Math.round(width*.042)+'px sans-serif';
+  outCtx.fillText(ended?'Call ended':enabled&&otherConnected?'Connecting audio and video':otherConnected?'Waiting for the host':'Waiting for second participant',cx,height*.68,width*.92);
+  outCtx.fillStyle='#a5b5bf';outCtx.font=Math.round(width*.032)+'px sans-serif';outCtx.fillText('Group call',cx,height*.82);
+ }
  function yapNativeProps(){
   const roots=new Set(),fallback=[];
   for(const element of document.querySelectorAll('button,video')){
@@ -67,7 +78,7 @@
   return {found:false,status:null,socketConnected:false,matchKind:null,mode:null};
  }
  const remoteView=document.createElement('video');remoteView.autoplay=true;remoteView.muted=true;remoteView.playsInline=true;
- const renderTimer=setInterval(()=>{mount();if(yap&&!ended)yapClientState();if(fixture){const ctx=fixture.canvas.getContext('2d');ctx.fillStyle=fixture.color;ctx.fillRect(0,0,640,360);}const siteVideo=siteRemoteVideo();if(!fixture&&siteVideo?.srcObject&&siteVideo.srcObject!==remote)setRemote(siteVideo.srcObject);const needPreview=!!fixture||previewRequested||(enabled&&otherConnected),nativePreview=siteVideo?.srcObject===remote&&siteVideo.readyState>=2;const fallback=needPreview&&!nativePreview?remote:null;if(remoteView.srcObject!==fallback){remoteView.srcObject=fallback;if(fallback)remoteView.play().catch(()=>{});}const live=connected();if(live)remoteWasConnected=true;gain.gain.value=enabled&&otherConnected&&live?1:0;if(needPreview)draw(previewCtx,live?(nativePreview?siteVideo:remoteView):null);draw(outCtx,enabled&&otherConnected&&live?incoming:null);},1000/fps);
+ const renderTimer=setInterval(()=>{mount();if(yap&&!ended)yapClientState();if(fixture){const ctx=fixture.canvas.getContext('2d');ctx.fillStyle=fixture.color;ctx.fillRect(0,0,640,360);}const siteVideo=siteRemoteVideo();if(!fixture&&siteVideo?.srcObject&&siteVideo.srcObject!==remote)setRemote(siteVideo.srcObject);const needPreview=!!fixture||previewRequested||(enabled&&otherConnected),nativePreview=siteVideo?.srcObject===remote&&siteVideo.readyState>=2;const fallback=needPreview&&!nativePreview?remote:null;if(remoteView.srcObject!==fallback){remoteView.srcObject=fallback;if(fallback)remoteView.play().catch(()=>{});}const live=connected();if(live)remoteWasConnected=true;gain.gain.value=enabled&&otherConnected&&live?1:0;if(needPreview)draw(previewCtx,live?(nativePreview?siteVideo:remoteView):null);if(enabled&&otherConnected&&live&&incoming.readyState>=2&&!player.failed)draw(outCtx,incoming);else drawWaiting();},1000/fps);
  window.__videoHost={
   status(){
    const visible=el=>{if(el.closest('[hidden],[aria-hidden="true"],[inert]'))return false;if(el.checkVisibility&&!el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;const rect=el.getBoundingClientRect();if(!rect.width||!rect.height||rect.bottom<=0||rect.right<=0||rect.top>=innerHeight||rect.left>=innerWidth)return false;for(let node=el;node instanceof Element;node=node.parentElement){const style=getComputedStyle(node);if(style.display==='none'||style.visibility==='hidden'||Number(style.opacity)===0)return false;}return true;};

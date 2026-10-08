@@ -15,6 +15,28 @@ test('Yap bridge carries generated video and audio in both directions',async()=>
  }})});
  try{assert.deepEqual(await host.test(3000),{ok:true,videoBothWays:true,audioBothWays:true});}finally{await host.shutdown();await browser.close();}
 });
+test('the native camera shows an animated waiting screen and returns to it when forwarding stops',async()=>{
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
+  const context=await browser.newContext(options);await context.route('http://127.0.0.1:3000/video-fixture',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><body>Generated media test</body>'}));return context;
+ }})});
+ try{
+  await host.open(0,{fixture:true});await host.open(1,{fixture:true});await host.tick();
+  const page=host.slots[0].page;
+  const frames=await page.evaluate(async()=>{
+   const camera=document.createElement('video');camera.muted=true;camera.srcObject=await navigator.mediaDevices.getUserMedia({video:true});await camera.play();
+   const canvas=document.createElement('canvas');canvas.width=320;canvas.height=180;const ctx=canvas.getContext('2d');
+   const sample=()=>{ctx.drawImage(camera,0,0,320,180);const pixels=ctx.getImageData(0,0,320,180).data;let hash=2166136261,lit=0;for(let n=0;n<pixels.length;n++){hash=Math.imul(hash^pixels[n],16777619);if(n%4!==3&&pixels[n]>0)lit++;}return {hash,lit};};
+   await new Promise(r=>setTimeout(r,300));const a=sample();await new Promise(r=>setTimeout(r,350));const b=sample();for(const track of camera.srcObject.getTracks())track.stop();return [a,b];
+  });
+  assert.ok(frames.every(frame=>frame.lit>320*180));assert.notEqual(frames[0].hash,frames[1].hash);
+  await host.toggle(true,true);
+  await page.waitForFunction(()=>{const d=window.__videoHost.diagnostics();return d.outgoingPixel[2]>180&&d.outgoingPixel[0]<80&&d.audioPeak>500;});
+  await host.toggle(false,false);
+  await page.waitForFunction(()=>{const d=window.__videoHost.diagnostics();return d.outgoingPixel[0]===16&&d.outgoingPixel[1]===24&&d.outgoingPixel[2]===32&&d.audioPeak===0;});
+  assert.equal((await page.evaluate(()=>window.__videoHost.status())).bridgeEnabled,false);
+ }finally{await host.shutdown();await browser.close();}
+});
 test('Yap uses isolated main pages and native Start with no credential injection',async()=>{
  const data=await mkdtemp(join(tmpdir(),'yap-profiles-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const contexts=[];
@@ -29,7 +51,7 @@ test('Yap uses isolated main pages and native Start with no credential injection
  try{
   await host.start(0,{selfGender:'male'});await host.start(1,{selfGender:'female'});
   assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
-  for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(await slot.page.evaluate(()=>window.earlyClicks),0);assert.equal(await slot.page.evaluate(()=>window.bootGender),slot===host.slots[0]?'male':'female');assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');const native=await slot.page.evaluate(()=>window.__videoHost.status());assert.equal(native.nativeMediaReady,true);assert.equal(native.genderRequired,false);assert.equal(native.selfGender,slot.selfGender);assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
+   for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(await slot.page.evaluate(()=>window.earlyClicks),0);assert.equal(await slot.page.evaluate(()=>window.bootGender),slot===host.slots[0]?'male':'female');assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');const native=await slot.page.evaluate(()=>window.__videoHost.status());assert.equal(native.nativeMediaReady,true);assert.equal(native.genderRequired,false);assert.equal(native.selfGender,slot.selfGender);assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[16,24,32,255]);}
   await host.slots[0].page.evaluate(()=>localStorage.setItem('yapchat_user_id','native-fixture-identity-A'));await host.slots[1].page.evaluate(()=>localStorage.setItem('yapchat_user_id','native-fixture-identity-B'));
   await host.close(0);await host.start(0,{selfGender:'male'});
   assert.equal(await host.slots[0].page.evaluate(()=>localStorage.getItem('yapchat_user_id')),'native-fixture-identity-A');assert.equal(await host.slots[1].page.evaluate(()=>localStorage.getItem('yapchat_user_id')),'native-fixture-identity-B');assert.equal(host.slots[0].profile.restored,true);
