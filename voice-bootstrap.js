@@ -1,3 +1,31 @@
+// Keep the operator's token pinned for the life of the page, the way an
+// always-on content script would: whenever anything replaces it, re-write the
+// token back into both localStorage and the live client store so browser A
+// never drifts off the configured token. Runs from document-start onward.
+export function pinVoiceToken(token) {
+  if (location.origin !== 'https://nekto-me.kz') return;
+  if (typeof token !== 'string' || !token) return;
+  const KEY = 'storage_audio_v2';
+  const apply = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {};
+      if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.user?.authToken !== token) {
+        saved.user = saved.user || {};
+        saved.user.authToken = token;
+        localStorage.setItem(KEY, JSON.stringify(saved));
+      }
+    } catch {}
+    try {
+      for (const el of document.querySelectorAll('*')) {
+        const state = el.__vue__?.$store?.state;
+        if (state?.user && state.system && state.user.authToken !== token) state.user.authToken = token;
+      }
+    } catch {}
+  };
+  apply();
+  setInterval(apply, 250);
+}
+
 // The context already contains the token before page creation. This also
 // supports document-start initialization when used independently.
 export function primeVoiceStorage(token) {

@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {EventEmitter} from 'node:events';import {AudioHost} from '../audio-host.js';import {confirmVoiceSession} from '../voice-session.js';
 import {loadAudioTokens} from '../audio-token-config.js';
 import {AudioGraph} from '../audio-graph.js';
-import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {primeVoiceStorage,pinVoiceToken} from '../voice-bootstrap.js';
 import {voiceReady} from '../voice-session.js';
 import {runInNewContext} from 'node:vm';
 test('authorized native client is ready without the optional isFirstLoaded flag',()=>{
@@ -120,7 +120,7 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   const page=new EventEmitter();page.goto=async()=>{const socket=new EventEmitter();socket.url=()=> 'wss://audio.nekto-me.kz/websocket/';page.emit('websocket',socket);socket.emit('framesent',{payload:'42["event",{"type":"register","userId":"logging-fixture-token"}]'});socket.emit('framereceived',{payload:'42["registered",{"success":true}]'});};page.waitForFunction=async()=>{};
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
   const initCalls=[];
-  const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(typeof initCalls[1].input.content,'string');return page;}};
+  const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(initCalls[1].input,pinVoiceToken);assert.equal(initCalls[1].arg,'logging-fixture-token');assert.equal(typeof initCalls[2].input.content,'string');return page;}};
   f.host.launch=async()=>({newContext:async options=>{assert.equal(JSON.parse(options.storageState.origins[0].localStorage[0].value).user.authToken,'logging-fixture-token');assert.equal(options.storageState.origins[0].origin,'https://nekto-me.kz');assert.deepEqual(options.viewport,{width:1920,height:1080});assert.equal(options.isMobile,false);assert.equal(options.hasTouch,false);return context;},close:async()=>{}});
   console.log=value=>logs.push(String(value));
   await f.host.prepare(0);
