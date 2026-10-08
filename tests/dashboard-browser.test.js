@@ -19,7 +19,8 @@ test('Connect both applies typed tokens and fills only empty fields from saved t
   await page.locator('#connectBoth').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('B: поиск запущен'));
   assert.deepEqual(submissions,[{path:'/api/audio/tokens',data:{tokens:['typed-fixture-A','typed-fixture-B'],consent:false}}]);
   await page.locator('#tokenA').fill('second-fixture-A');await page.locator('#tokenB').fill('');
-  await page.locator('#connectBoth').click();await page.waitForFunction(()=>!document.querySelector('#connectBoth').disabled);
+  const applied=page.waitForResponse(response=>response.url().endsWith('/api/audio/tokens')&&response.request().method()==='POST');
+  await page.locator('#connectBoth').click();await applied;await page.waitForFunction(()=>!document.querySelector('#connectBoth').disabled);
   assert.deepEqual(submissions[1],{path:'/api/audio/tokens',data:{tokens:['second-fixture-A','typed-fixture-B'],consent:false}});
  }finally{await browser.close();}
 });

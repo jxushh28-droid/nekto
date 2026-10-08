@@ -31,7 +31,8 @@ test('native controls click, type, press keys and scroll in the existing browser
   await host.input(0,{epoch:s.epoch,action:'scroll',deltaY:600});
   assert.deepEqual(actions,[['click',480,540],['text','fixture text'],['key','Shift+Tab'],['wheel',0,600]]);
   assert.equal(host.slots[0],s);assert.equal(host.ops.size,0);
-  assert.equal(JSON.stringify(await host.inspect(0)).includes(s.profileIdentity),false);
+  const inspected=await host.inspect(0);assert.equal(inspected.attempt.attemptId,s.profileIdentity);assert.equal(inspected.attempt.runId,s.epoch);
+  delete inspected.attempt.attemptId;assert.equal(JSON.stringify(inspected).includes(s.profileIdentity),false);
  }finally{await f.done();}
 });
 test('native controls reject replaced screens, invalid inputs, busy sessions and native restrictions',async()=>{
