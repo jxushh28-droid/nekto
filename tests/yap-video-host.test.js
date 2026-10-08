@@ -6,6 +6,11 @@ test('Yap receives only its selected native setup preference before page startup
  for(const gender of ['male','female'])assert.deepEqual(yapPreferences(gender),{cookies:[],origins:[{origin:'https://yap.chat',localStorage:[{name:'uhmingle_selected_gender',value:gender}]}]});
  for(const gender of ['',null,'all','adult'])assert.throws(()=>yapPreferences(gender),/valid gender/);
 });
+test('Yap preserves its native identity and cookies when applying the selected gender',()=>{
+ const original={cookies:[{name:'native',value:'private-cookie'}],origins:[{origin:'https://yap.chat',localStorage:[{name:'yapchat_user_id',value:'private-identity'},{name:'uhmingle_selected_gender',value:'male'}]}]};
+ const state=yapPreferences('female',original);
+ assert.equal(state.origins[0].localStorage[0].value,'private-identity');assert.equal(state.origins[0].localStorage[1].value,'female');assert.deepEqual(state.cookies,original.cookies);assert.equal(original.origins[0].localStorage[1].value,'male');
+});
 
 function fixture(state={mediaReady:true,connected:false,searching:false}){
  const calls=[];

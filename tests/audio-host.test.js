@@ -117,7 +117,7 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
  try{
   f.host.tokens=['logging-fixture-token',null];f.host.slots[0]=null;
   f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
-  const page=new EventEmitter();page.goto=async()=>{};page.waitForFunction=async()=>{};
+  const page=new EventEmitter();page.goto=async()=>{const socket=new EventEmitter();socket.url=()=> 'wss://audio.nekto-me.kz/websocket/';page.emit('websocket',socket);socket.emit('framesent',{payload:'42["event",{"type":"register","userId":"logging-fixture-token"}]'});socket.emit('framereceived',{payload:'42["registered",{"success":true}]'});};page.waitForFunction=async()=>{};
   page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{authenticated:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true}:fn.toString().includes('const stores')?{clientFound:true}:[];
   const initCalls=[];
   const context={grantPermissions:async()=>{},addInitScript:async (input,arg)=>{initCalls.push({input,arg});},newPage:async()=>{assert.equal(initCalls[0].input,primeVoiceStorage);assert.equal(initCalls[0].arg,'logging-fixture-token');assert.equal(typeof initCalls[1].input.content,'string');return page;}};
@@ -131,7 +131,8 @@ test('persistent WebSocket logging records metadata without payloads or raw erro
   ws.emit('socketerror','private-error-value');
   const all=logs.join('\n');for(const value of ['private-query-value','private-payload-value','private-binary-value','private-error-value'])assert.equal(all.includes(value),false);
   const frames=logs.map(value=>{try{return JSON.parse(value);}catch{return {};}}).filter(value=>['sent','received'].includes(value.event));
-  assert.equal(frames.length,2);assert.ok(frames.every(value=>value.payloadOmitted===true&&!('payload' in value)&&value.bytes>0));
+  assert.equal(frames.length,4);assert.ok(frames.every(value=>value.payloadOmitted===true&&!('payload' in value)&&value.bytes>0));
+  assert.equal(all.includes('logging-fixture-token'),false);assert.equal(f.host.status().slots[0].wire.sentTokenMatches,true);
  }finally{console.log=originalLog;await f.done();}
 });
 test('authorization-only token check prepares one side without clicking Start or changing the other token',async()=>{
@@ -141,6 +142,30 @@ test('authorization-only token check prepares one side without clicking Start or
   const result=await f.host.applySingle(0,'check-fixture-token',{startCall:false});
   assert.equal(result.ok,true);assert.equal(result.operation,'authorization');assert.deepEqual(checked,[0]);assert.equal(starts,0);
   assert.deepEqual(await loadAudioTokens(f.host.data),['check-fixture-token','other-fixture-token']);
+ }finally{await f.done();}
+});
+test('audio reconnect restores the native profile and confirms the sent token for each new browser',async()=>{
+ const f=await fixture(),contexts=[];
+ try{
+  f.host.tokens=['profile-fixture-token',null];f.host.slots[0]=null;f.host.graph.ensure=async()=>{};f.host.graph.browserEnv=()=>({});
+  f.host.launch=async()=>({newContext:async options=>{
+   contexts.push(structuredClone(options.storageState));const saved=structuredClone(options.storageState);
+   const storage=JSON.parse(saved.origins[0].localStorage[0].value);storage.user.volume=37;saved.origins[0].localStorage[0].value=JSON.stringify(storage);saved.cookies=[{domain:'.nekto-me.kz',name:'native-session',value:'private-cookie'}];
+   const page=new EventEmitter();page.waitForFunction=async()=>{};page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{savedTokenMatches:true,liveTokenMatches:true,authenticated:true,socketConnected:true}}:fn.toString().includes('__voiceTokenBootstrap')?{ok:true,phase:'document-start'}:fn.toString().includes('const stores')?{clientFound:true}:[];
+   page.goto=async()=>{const ws=new EventEmitter();ws.url=()=> 'wss://audio.nekto-me.kz/websocket/';page.emit('websocket',ws);ws.emit('framesent',{payload:'42["event",{"type":"register","userId":"profile-fixture-token"}]'});ws.emit('framereceived',{payload:'42["registered",{"success":true}]'});};
+   return {grantPermissions:async()=>{},addInitScript:async()=>{},newPage:async()=>page,storageState:async()=>saved};
+  },close:async()=>{}});
+  await f.host.prepare(0);assert.equal(f.host.slots[0].profile.restored,false);await f.host.close(0);
+  await f.host.prepare(0);const status=f.host.status().slots[0];
+  assert.equal(contexts.length,2);assert.equal(JSON.parse(contexts[1].origins[0].localStorage[0].value).user.volume,37);assert.equal(contexts[1].cookies[0].value,'private-cookie');
+  assert.equal(status.profile.restored,true);assert.equal(status.wire.sentTokenMatches,true);assert.equal(status.wire.registrationSucceeded,true);assert.doesNotMatch(JSON.stringify(status),/private-cookie|profile-fixture-token/);
+ }finally{await f.done();}
+});
+test('local token matches cannot authorize Start when the wire registration used a different token',async()=>{
+ const f=await fixture();try{
+  f.host.tokens=['expected-token',null];const slot=f.host.slots[0];slot.wire={registrationSent:true,sentTokenMatches:false,registrationReceived:true,registrationSucceeded:true};
+  slot.page.waitForFunction=async()=>{};slot.page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{savedTokenMatches:true,liveTokenMatches:true}}:[];
+  await assert.rejects(f.host.prepare(0),/did not confirm sending and accepting the saved token/);assert.equal(slot.prepared,undefined);
  }finally{await f.done();}
 });
 test('latest restriction source is retained after the socket disconnects',async()=>{

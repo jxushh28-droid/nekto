@@ -1,30 +1,38 @@
 import {VideoHost} from './video-host.js';
 import {readFile} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
+import {BrowserProfiles} from './browser-profile.js';
 
 const target='https://yap.chat/video';
 const injection=await readFile(new URL('./browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/video-runtime.js',import.meta.url),'utf8');
 
-export function yapPreferences(selfGender='male'){
+export function yapPreferences(selfGender='male',previous={cookies:[],origins:[]}){
  if(selfGender!=='male'&&selfGender!=='female')throw Error('Yap requires a valid gender selection before connecting.');
- return {cookies:[],origins:[{origin:'https://yap.chat',localStorage:[{name:'uhmingle_selected_gender',value:selfGender}]}]};
+ const state=structuredClone(previous);
+ let origin=state.origins.find(entry=>entry.origin==='https://yap.chat');
+ if(!origin){origin={origin:'https://yap.chat',localStorage:[]};state.origins.push(origin);}
+ let gender=origin.localStorage.find(item=>item.name==='uhmingle_selected_gender');
+ if(!gender){gender={name:'uhmingle_selected_gender',value:selfGender};origin.localStorage.push(gender);}else gender.value=selfGender;
+ return state;
 }
 
 export class YapVideoHost extends VideoHost{
- constructor(options){super({...options,pageUrl:target,sessionless:true});this.lastAttempts=[null,null];}
+ constructor(options){super({...options,pageUrl:target,sessionless:true});this.lastAttempts=[null,null];this.profiles=new BrowserProfiles(options.data+'/yap-profiles','https://yap.chat');}
  frame(slot){
   if(!slot?.page)return;
   return slot.page.frames().find(f=>{try{const u=new URL(f.url());return slot.fixture?u.hostname==='127.0.0.1':u.origin==='https://yap.chat'&&u.pathname==='/video';}catch{return false;}});
  }
  async open(i,{fixture=false,port=3000,selfGender='male'}={}){
-  const storageState=yapPreferences(selfGender);
+  yapPreferences(selfGender);
   if(this.slots[i])return;
+  const profile=fixture?{state:{cookies:[],origins:[]},restored:false}:await this.profiles.load(i);
+  const storageState=yapPreferences(selfGender,profile.state);
   this.lastAttempts[i]=null;
   const browser=await this.getBrowser();
   // Yap reads this normal setup preference at mount. Without it, permission
   // approval opens the gender picker and its own socket effect cannot run.
   const context=await browser.newContext({viewport:{width:1280,height:720},storageState});
-  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,selfGender,cache:[],cacheBytes:0,generation:null,error:'',network:{httpErrors:[],failedRequests:0,sockets:0,socketErrors:0,sentFrames:0,receivedFrames:0}};
+  const slot={id:randomUUID(),context,page:null,pages:[],status:'loading',connected:false,busy:true,remember:false,fixture,selfGender,profile:{restored:profile.restored,saved:false,saveFailed:false},cache:[],cacheBytes:0,generation:null,error:'',network:{httpErrors:[],failedRequests:0,sockets:0,socketErrors:0,sentFrames:0,receivedFrames:0}};
   this.slots[i]=slot;
   try{
    await context.grantPermissions(['camera','microphone'],{origin:'https://yap.chat'});
@@ -62,6 +70,12 @@ export class YapVideoHost extends VideoHost{
   return {frame,state};
  }
  async prepareSession(i){await this.open(i);await this.currentClient(this.slots[i]);}
+ async persistProfile(i,slot){
+  if(slot.fixture||slot.crashed||!slot.context?.storageState)return;
+  slot.profile||={restored:false,saved:false,saveFailed:false};
+  try{await this.profiles.save(i,await slot.context.storageState());slot.profile.saved=true;slot.profile.saveFailed=false;}
+  catch{slot.profile.saveFailed=true;console.warn(JSON.stringify({event:'yap_profile_save_failed',slot:i?'B':'A'}));}
+ }
  checkNative(state){
   if(state.verification)throw Error('Yap requires verification.');
   if(state.login)throw Error('Yap requires sign-in before starting this session.');
@@ -118,6 +132,7 @@ export class YapVideoHost extends VideoHost{
    ({state}=await this.currentClient(slot));
    this.checkNative(state);
    if(state.connected||state.searching){slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
+   await this.persistProfile(i,slot);
    stage='click-native-start';
    await start.click({timeout:5000});
    slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';
@@ -133,13 +148,14 @@ export class YapVideoHost extends VideoHost{
   const slot=this.slots[i];if(!slot)return;
   if(!slot.fixture){
    const state=slot.lastNativeState||{};
-   this.lastAttempts[i]={at:Date.now(),ended:!!state.ended,selfGender:slot.selfGender||null,nativeStatus:state.nativeStatus||null,nativeSocketConnected:!!state.nativeSocketConnected,nativeMatchKind:state.nativeMatchKind||null,hadLiveMedia:!!slot.hadLiveMedia,failureStage:slot.failureStage||null};
+   await this.persistProfile(i,slot);
+   this.lastAttempts[i]={at:Date.now(),ended:!!state.ended,selfGender:slot.selfGender||null,nativeStatus:state.nativeStatus||null,nativeSocketConnected:!!state.nativeSocketConnected,nativeMatchKind:state.nativeMatchKind||null,nativeMode:state.nativeMode||null,hadLiveMedia:!!slot.hadLiveMedia,profile:slot.profile?{...slot.profile}:null,failureStage:slot.failureStage||null};
    console.info(JSON.stringify({event:'yap_video_closed',slot:i?'B':'A',reason:state.ended?'participant-ended':'closed',nativeStatus:state.nativeStatus||null,matchKind:state.nativeMatchKind||null,hadLiveMedia:!!slot.hadLiveMedia}));
   }
   await super.close(i);
  }
  status(){const status=super.status();return {...status,provider:'yap',requiresSession:false,slots:status.slots.map((slot,i)=>({...slot,status:!slot.open&&this.lastAttempts[i]?.ended?'ended':slot.status,error:!slot.open&&this.lastAttempts[i]?.ended?'Yap participant disconnected or the native room changed. Connect this side again when ready.':slot.error,selfGender:this.slots[i]?.selfGender||this.lastAttempts[i]?.selfGender||null,lastAttempt:this.lastAttempts[i]}))};}
- async inspect(){const result=await super.inspect();for(let i=0;i<2;i++){result.slots[i].failureStage=this.slots[i]?.failureStage||null;result.slots[i].lastAttempt=this.lastAttempts[i];}return result;}
+ async inspect(){const result=await super.inspect();for(let i=0;i<2;i++){result.slots[i].failureStage=this.slots[i]?.failureStage||null;result.slots[i].lastAttempt=this.lastAttempts[i];result.slots[i].profile=this.slots[i]?.profile?{...this.slots[i].profile}:null;}return result;}
  async send(i,text){
   if(typeof text!=='string'||!text.trim()||text.length>4000)throw Error('Write a message of 1–4000 characters.');
   const slot=this.slots[i];if(!slot?.connected)throw Error('Connect this participant first.');

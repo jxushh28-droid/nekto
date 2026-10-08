@@ -7,6 +7,8 @@ import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
 import {primeVoiceStorage} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
+import {BrowserProfiles} from './browser-profile.js';
+import {voiceWireFrame} from './voice-wire.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -28,6 +30,7 @@ function redactWsText(value) {
 export class AudioHost{
   constructor({data,graph=new AudioGraph(),launch=options=>chromium.launch(options)}){
     this.data=data+'/audio';
+    this.profiles=new BrowserProfiles(this.data+'/profiles','https://nekto-me.kz');
     this.graph=graph;
     this.launch=launch;
     this.slots=[null,null];
@@ -60,6 +63,7 @@ export class AudioHost{
     if(s?.prepared)return s;
 
     if(!s){
+      const profile=await this.profiles.load(i,this.tokens[i]);
       await this.graph.ensure();
 
       const browser=await this.launch({
@@ -72,7 +76,7 @@ export class AudioHost{
 
       try{
       const context=await browser.newContext({
-        storageState:voiceStorageState(this.tokens[i]),
+        storageState:voiceStorageState(this.tokens[i],profile.state),
         viewport:{width:1920,height:1080},
         isMobile:false,
         hasTouch:false,
@@ -124,6 +128,9 @@ page.on("websocket", ws => {
 
   const logFrame = (direction, { payload }) => {
     const binary = Buffer.isBuffer(payload);
+    const nativeSocket=new URL(ws.url()).hostname==='audio.nekto-me.kz';
+    const wire=nativeSocket?voiceWireFrame(direction,payload,s.profileIdentity):null;
+    if(wire){Object.assign(s.wire,wire);this.recordAttempt(i,s);log('native-registration',{...wire});}
     log(direction, {
       frameSequence: ++frameSequence,
       binary,
@@ -139,7 +146,7 @@ page.on("websocket", ws => {
   ws.on("socketerror", () => log("error"));
   ws.on("close", () => log("closed"));
 });
-      s={browser,context,page,bootstrap,stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
+      s={browser,context,page,bootstrap,profileIdentity:this.tokens[i],profile:{restored:profile.restored,saved:false,saveFailed:false},wire:{registrationSent:false,sentTokenMatches:null,registrationReceived:false,registrationSucceeded:null,registrationError:null,lastResult:null},stage:'navigate',status:'loading',connected:false,prepared:false,error:'',epoch:this.attempts[i]?.attemptId||crypto.randomUUID()};
       this.slots[i]=s;
       this.screens[i]=null;
       this.recordAttempt(i,s);
@@ -244,10 +251,12 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
             :'Nekto did not confirm this voice session: '+result.reason
       );
     }
+    if(s.wire&&(!s.wire.registrationSent||!s.wire.sentTokenMatches||!s.wire.registrationReceived||!s.wire.registrationSucceeded))throw Error('Nekto native registration did not confirm sending and accepting the saved token. The call has not been started.');
 
     s.prepared=true;
     s.stage='native-session-ready';
     s.status='ready';
+    await this.persistProfile(i,s);
     return s;
   }
 
@@ -379,7 +388,14 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+  }
+
+  async persistProfile(i,s){
+    if(!s?.context?.storageState||s.crashed)return;
+    try{await this.profiles.save(i,await s.context.storageState(),s.profileIdentity);if(s.profile){s.profile.saved=true;s.profile.saveFailed=false;}}
+    catch{if(s.profile)s.profile.saveFailed=true;console.warn(JSON.stringify({event:'audio_profile_save_failed',slot:i?'B':'A'}));}
+    this.recordAttempt(i,s);
   }
 
   recordDiagnostics(i,s,entries=[]){
@@ -469,6 +485,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         busy:this.setup||this.ops.has(i),
         error:s?.error||s?.captureError||'',
         authorization:s?.authorization||null,
+        wire:s?.wire?{...s.wire}:null,
+        profile:s?.profile?{...s.profile}:null,
         diagnostics:s?.diagnostics||[],
         microphone:s?.microphone||null,
         screenAvailable:!!s&&this.screens[i]?.epoch===s.epoch,
@@ -589,6 +607,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     if(this.graph.process)await this.graph.routing(false).catch(()=>{});
     await this.inspectMicrophone(i,s,'before-stop');
     await this.captureScreen(i,s,true);
+    await this.persistProfile(i,s);
     await s.browser.close().catch(()=>{});
   }
 
@@ -605,7 +624,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       r.end();
     }
     this.clients[i].clear();
-    if(s)await s.browser.close().catch(()=>{});
+    if(s){if(!s.stopped)await this.persistProfile(i,s);await s.browser.close().catch(()=>{});}
   }
 
   async shutdown(){

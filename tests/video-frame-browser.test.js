@@ -16,9 +16,9 @@ test('Yap bridge carries generated video and audio in both directions',async()=>
  try{assert.deepEqual(await host.test(3000),{ok:true,videoBothWays:true,audioBothWays:true});}finally{await host.shutdown();await browser.close();}
 });
 test('Yap uses isolated main pages and native Start with no credential injection',async()=>{
- const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const data=await mkdtemp(join(tmpdir(),'yap-profiles-')),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const contexts=[];
- const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{
+ const host=new YapVideoHost({data,getBrowser:async()=>({newContext:async options=>{
   assert.equal(options.storageState.origins[0].origin,'https://yap.chat');
   const context=await browser.newContext(options);contexts.push(context);
   await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html; charset=utf-8',body:`<!doctype html><meta charset="utf-8"><div>Loading...</div><script>
@@ -30,7 +30,44 @@ test('Yap uses isolated main pages and native Start with no credential injection
   await host.start(0,{selfGender:'male'});await host.start(1,{selfGender:'female'});
   assert.equal(contexts.length,2);assert.notEqual(contexts[0],contexts[1]);
   for(const slot of host.slots){await slot.page.waitForFunction(()=>!!window.stream&&window.__videoHost.diagnostics().outgoingPixel[3]===255);assert.deepEqual(await slot.page.evaluate(()=>({starts:window.starts,credentials:localStorage.getItem('snid'),kinds:window.stream.getTracks().map(t=>t.kind).sort()})),{starts:1,credentials:null,kinds:['audio','video']});assert.equal(await slot.page.evaluate(()=>window.entries),1);assert.equal(await slot.page.evaluate(()=>window.earlyClicks),0);assert.equal(await slot.page.evaluate(()=>window.bootGender),slot===host.slots[0]?'male':'female');assert.equal(host.frame(slot),slot.page.mainFrame());assert.equal(slot.status,'searching');const native=await slot.page.evaluate(()=>window.__videoHost.status());assert.equal(native.nativeMediaReady,true);assert.equal(native.genderRequired,false);assert.equal(native.selfGender,slot.selfGender);assert.equal(await slot.page.evaluate(()=>window.stream.getVideoTracks()[0].getSettings().width),320);assert.deepEqual(await slot.page.evaluate(()=>window.__videoHost.diagnostics().outgoingPixel),[0,0,0,255]);}
- }finally{await host.shutdown();await browser.close();}
+  await host.slots[0].page.evaluate(()=>localStorage.setItem('yapchat_user_id','native-fixture-identity-A'));await host.slots[1].page.evaluate(()=>localStorage.setItem('yapchat_user_id','native-fixture-identity-B'));
+  await host.close(0);await host.start(0,{selfGender:'male'});
+  assert.equal(await host.slots[0].page.evaluate(()=>localStorage.getItem('yapchat_user_id')),'native-fixture-identity-A');assert.equal(await host.slots[1].page.evaluate(()=>localStorage.getItem('yapchat_user_id')),'native-fixture-identity-B');assert.equal(host.slots[0].profile.restored,true);
+ }finally{await host.shutdown();await browser.close();await rm(data,{recursive:true,force:true});}
+});
+test('Yap waits for incoming audio, video and its first decoded frame before reporting a connection',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="native-remote" autoplay muted playsinline></video><button id="native">START</button>'}));
+  const page=await context.newPage();await page.goto('https://yap.chat/video');
+  await page.evaluate(()=>{
+   window.nativeProps={onStart(){},status:'connecting',socket:{connected:true,auth:{mode:'normal',token:'private-token'}},currentMatch:{type:'user',roomId:'private-room'}};document.getElementById('native').__reactFiber$fixture={return:{memoizedProps:window.nativeProps}};
+   window.fixturePeer=new RTCPeerConnection();Object.defineProperty(window.fixturePeer,'connectionState',{value:'connected'});
+   window.fixtureAudio=new AudioContext();window.remoteStream=window.fixtureAudio.createMediaStreamDestination().stream;document.getElementById('native-remote').srcObject=window.remoteStream;
+   const event=new Event('track');Object.defineProperties(event,{track:{value:window.remoteStream.getAudioTracks()[0]},streams:{value:[window.remoteStream]}});window.fixturePeer.dispatchEvent(event);
+  });
+  let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.connected,false);assert.equal(state.ended,false);assert.equal(state.nativeMode,'normal');assert.equal(state.remoteTracks[0].kind,'audio');assert.doesNotMatch(JSON.stringify(state),/private-token|private-room/);
+  await page.evaluate(()=>{
+   window.fixtureCanvas=document.createElement('canvas');const track=window.fixtureCanvas.captureStream(15).getVideoTracks()[0];window.remoteStream.addTrack(track);window.nativeProps.status='inCall';window.fixtureCanvas.getContext('2d').fillRect(0,0,300,150);
+   const event=new Event('track');Object.defineProperties(event,{track:{value:track},streams:{value:[window.remoteStream]}});window.fixturePeer.dispatchEvent(event);
+  });
+  await page.waitForFunction(()=>window.__videoHost.status().connected);
+  state=await page.evaluate(()=>window.__videoHost.status());assert.deepEqual(state.remoteTracks.map(t=>t.kind).sort(),['audio','video']);assert.equal(state.ended,false);
+  await page.evaluate(()=>window.remoteStream.getVideoTracks()[0].stop());assert.equal((await page.evaluate(()=>window.__videoHost.status())).connected,false);
+ }finally{await context.close();await browser.close();}
+});
+test('Yap reports provider matching modes without treating test mode as proof of playback',async()=>{
+ const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<button id="native">START</button>'}));
+  const page=await context.newPage();await page.goto('https://yap.chat/video?mode=user');
+  let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeMode,'test');assert.equal(state.nativeError,'');
+  await page.goto('https://yap.chat/video?mode=matches');state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeMode,'bot-only');assert.match(state.nativeError,/playback-only/);assert.equal(state.connected,false);
+ }finally{await context.close();await browser.close();}
 });
 test('Yap reads leaf status messages and distinguishes sign-in and media failure from verification',async()=>{
  const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
@@ -65,7 +102,7 @@ test('Yap ignores stale React renders and closes only after a committed particip
  const context=await browser.newContext();
  try{
   await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
-  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<button id="native">START</button>'}));
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="native-remote" autoplay muted playsinline></video><button id="native">START</button>'}));
   const page=await context.newPage();await page.goto('https://yap.chat/video');
   await page.evaluate(()=>{
    const stale={memoizedProps:{onStart(){},status:'idle',socket:{connected:false},currentMatch:null}};
@@ -73,13 +110,13 @@ test('Yap ignores stale React renders and closes only after a committed particip
    const root={current:null},oldRoot={stateNode:root,child:stale},newRoot={stateNode:root,child:current};stale.return=oldRoot;current.return=newRoot;oldRoot.alternate=newRoot;newRoot.alternate=oldRoot;root.current=newRoot;
    window.fixtureRoot=root;window.fixtureCurrent=current;document.getElementById('native').__reactFiber$fixture={return:stale};
    window.fixturePeer=new RTCPeerConnection();Object.defineProperty(window.fixturePeer,'connectionState',{value:'connected'});
-   window.fixtureCanvas=document.createElement('canvas');window.fixtureTrack=window.fixtureCanvas.captureStream(15).getVideoTracks()[0];const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureTrack},streams:{value:[new MediaStream([window.fixtureTrack])]}});window.fixturePeer.dispatchEvent(event);
+   window.fixtureAudio=new AudioContext();const audioTrack=window.fixtureAudio.createMediaStreamDestination().stream.getAudioTracks()[0];window.fixtureCanvas=document.createElement('canvas');window.fixtureTrack=window.fixtureCanvas.captureStream(15).getVideoTracks()[0];window.fixtureCanvas.getContext('2d').fillRect(0,0,300,150);const stream=new MediaStream([window.fixtureTrack,audioTrack]);document.getElementById('native-remote').srcObject=stream;const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureTrack},streams:{value:[stream]}});window.fixturePeer.dispatchEvent(event);
   });
   await page.waitForFunction(()=>window.__videoHost.status().connected&&window.__videoHost.diagnostics().outgoingPixel[3]===255);
   let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeStatus,'inCall');assert.equal(state.nativeSocketConnected,true);assert.equal(state.ended,false);assert.equal(state.connected,true);assert.doesNotMatch(JSON.stringify(state),/private-token|private-room/);
   state=await page.evaluate(()=>{const pending=window.fixtureRoot.current.alternate.child;pending.memoizedProps={...window.fixtureCurrent.memoizedProps,currentMatch:{type:'user',roomId:'private-room-two'}};return window.__videoHost.status();});
   assert.equal(state.ended,false);assert.equal(state.connected,true);
-  state=await page.evaluate(()=>{window.fixtureRoot.current=window.fixtureRoot.current.alternate;const state=window.__videoHost.status();window.__videoHost.dispose();window.fixturePeer.close();window.fixtureTrack.stop();return state;});
+  state=await page.evaluate(()=>{window.fixtureRoot.current=window.fixtureRoot.current.alternate;const state=window.__videoHost.status();window.__videoHost.dispose();window.fixturePeer.close();window.fixtureTrack.stop();void window.fixtureAudio.close();return state;});
   assert.equal(state.ended,true);assert.equal(state.connected,false);assert.doesNotMatch(JSON.stringify(state),/private-token|private-room/);
  }finally{await context.close();await browser.close();}
 });
@@ -88,13 +125,13 @@ test('Yap participant changes stop media even when a replacement track arrives b
  const context=await browser.newContext();
  try{
   await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
-  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<button id="native">START</button>'}));
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="native-remote" autoplay muted playsinline></video><button id="native">START</button>'}));
   const page=await context.newPage();await page.goto('https://yap.chat/video');
   await page.evaluate(()=>{
    const props={onStart(){},status:'inCall',socket:{connected:true},currentMatch:{type:'user',roomId:'private-room-one'}};document.getElementById('native').__reactFiber$fixture={return:{memoizedProps:props}};
    window.fixturePeer=new RTCPeerConnection();Object.defineProperty(window.fixturePeer,'connectionState',{value:'connected'});
-   window.fixtureCanvas=document.createElement('canvas');window.fixtureTracks=[window.fixtureCanvas.captureStream(15).getVideoTracks()[0]];
-   const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureTracks[0]},streams:{value:[new MediaStream(window.fixtureTracks)]}});window.fixturePeer.dispatchEvent(event);
+   window.fixtureAudio=new AudioContext();const audioTrack=window.fixtureAudio.createMediaStreamDestination().stream.getAudioTracks()[0];window.fixtureCanvas=document.createElement('canvas');window.fixtureTracks=[window.fixtureCanvas.captureStream(15).getVideoTracks()[0],audioTrack];window.fixtureCanvas.getContext('2d').fillRect(0,0,300,150);const stream=new MediaStream(window.fixtureTracks);document.getElementById('native-remote').srcObject=stream;
+   const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureTracks[0]},streams:{value:[stream]}});window.fixturePeer.dispatchEvent(event);
   });
   await page.waitForFunction(()=>window.__videoHost.status().connected&&window.__videoHost.diagnostics().outgoingPixel[3]===255);
   const state=await page.evaluate(()=>{
