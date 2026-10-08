@@ -93,3 +93,39 @@ test('audio panel shows the native screen and keeps the final failure image visi
   assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.ok(requests>=2);
  }finally{await browser.close();}
 });
+
+test('audio browser tools send normalized clicks, text and keys only for the displayed session',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),submissions=[];
+  const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwWhAPAAI5ATKtB7p3AAAAAElFTkSuQmCC','base64');
+  let epoch='current-screen',screenEpoch=epoch;
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.endsWith('/screen'))return route.fulfill({body:image,contentType:'image/png',headers:{'X-Screen-Time':String(Date.now()),'X-Screen-Epoch':screenEpoch}});
+   if(url.pathname.endsWith('/stream'))return route.fulfill({body:': fixture\n\n',contentType:'text/event-stream'});
+   if(url.pathname.endsWith('/input')){submissions.push(JSON.parse(route.request().postData()));body=JSON.stringify({ok:true});}
+   else if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:true,interactive:true,paused:true,screenAvailable:true,attemptId:epoch,status:'verification',busy:false,connected:false,error:'',callToken:{before:{liveTokenMatches:true,savedTokenMatches:true},after:{liveTokenMatches:true,savedTokenMatches:true}}},{open:false,status:'closed',busy:false,connected:false,error:''}]});
+   else if(url.pathname.endsWith('/inspect'))body=JSON.stringify({open:true,attempt:{tokenInspection:{liveTokenMatches:true,savedTokenMatches:true}}});
+   else{const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');
+  await page.waitForFunction(()=>document.querySelector('#card0 .screenImage').naturalWidth===1);
+  await page.locator('#card0 .devTools summary').click();await page.locator('#card0 .controlToggle').click();
+  await page.locator('#card0 .screenImage').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .typeText').disabled);
+  assert.equal(submissions[0].epoch,epoch);assert.equal(submissions[0].action,'click');assert.ok(Math.abs(submissions[0].x-.5)<.01);assert.ok(Math.abs(submissions[0].y-.5)<.01);
+  await page.locator('#card0 .nativeText').fill('fixture typing');await page.locator('#card0 .typeText').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .pressKey').disabled);
+  await page.locator('#card0 .nativeKey').selectOption('Enter');await page.locator('#card0 .pressKey').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .inspect').disabled);
+  assert.deepEqual(submissions[1],{epoch,action:'text',text:'fixture typing'});assert.deepEqual(submissions[2],{epoch,action:'key',key:'Enter'});
+  assert.match(await page.locator('#card0 .callTokenProof').textContent(),/После Start: совпадает/);
+  await page.locator('#card0 .inspect').click();await page.waitForFunction(()=>document.querySelector('#card0 .diagnostics').textContent.includes('liveTokenMatches'));
+  epoch='replacement-screen';screenEpoch='old-screen';
+  await page.waitForTimeout(2200);
+  await page.locator('#card0 .screenImage').click();await page.waitForFunction(()=>document.querySelector('#error').textContent.includes('Экран обновляется'));
+  assert.equal(submissions.length,3);
+ }finally{await browser.close();}
+});

@@ -109,7 +109,7 @@ test('verification appearing during the seven-second wait prevents Start',async(
   let clicks=0,preparedAt;f.host.prepare=async()=>{preparedAt=performance.now();return f.host.slots[0];};
   f.host.state=async()=>{assert.ok(performance.now()-preparedAt>=7000);return {status:'verification',authenticated:true,socketConnected:true};};
   f.host.slots[0].page.locator=()=>({isVisible:async()=>true,click:async()=>clicks++});
-  await assert.rejects(f.host.start(0),/requires attention/);assert.equal(clicks,0);assert.equal(f.host.slots[0].stopped,true);
+  await assert.rejects(f.host.start(0),/requires attention/);assert.equal(clicks,0);assert.equal(f.host.slots[0].stopped,undefined);assert.equal(f.host.slots[0].paused,true);
  }finally{await f.done();}
 });
 test('persistent WebSocket logging records metadata without payloads or raw errors',async()=>{
@@ -203,23 +203,23 @@ test('voice stops when native startup requires verification, rejects the token o
 test('voice startup timeout never retries authorization',async()=>{const f=voiceFixture();try{const result=await confirmVoiceSession({token:'expected-token',timeout:20});assert.equal(result.reason,'native-authorization-timeout');assert.deepEqual(f.counts(),{writes:0,requests:0});}finally{f.done();}});
 test('native registration rejection is reported without requesting a replacement token',async()=>{const f=voiceFixture();try{f.system.errorRegistered=425;const result=await confirmVoiceSession({token:'expected-token',timeout:100});assert.equal(result.reason,'native-registration-error-425');assert.equal(result.diagnostics.registrationError,425);assert.deepEqual(f.counts(),{writes:0,requests:0});}finally{f.done();}});
 test('polling preserves a failed startup reason and never repeats preparation automatically',async()=>{const f=await fixture();let preparations=0;try{f.states[0]={status:'ready',connected:false};f.host.slots[0].connected=false;f.host.prepare=async()=>{preparations++;throw Error('Nekto rejected voice registration (code 425).');};await assert.rejects(f.host.start(0),/425/);await f.host.tick();await f.host.tick();const status=f.host.status().slots[0];assert.equal(status.status,'error');assert.match(status.error,/425/);assert.equal(preparations,1);}finally{await f.done();}});
-test('verification during Start closes the browser and preserves the failure checkpoint without retries',async()=>{const f=await fixture();try{
+test('verification during Start retains the same browser and keeps observing without retries',async()=>{const f=await fixture();try{
  const s=f.host.slots[0];let closed=0,reads=0;s.stage='before-start';s.browser.close=async()=>closed++;
  f.host.prepare=async()=>s;f.host.state=async slot=>{if(slot!==s)return f.states[1];reads++;return {status:'verification',connected:false,detail:'Nekto requires verification.',authenticated:true,socketConnected:true,diagnostics:[{seq:1,captcha:true,tokenChanges:0}]};};
  await assert.rejects(f.host.start(0),/verification/);await f.host.tick();await f.host.tick();
- const result=f.host.status().slots[0];assert.equal(closed,1);assert.equal(reads,1);assert.equal(result.open,false);assert.equal(result.closable,true);assert.equal(result.stopped,true);assert.equal(result.status,'verification');assert.equal(result.stage,'before-start');assert.equal(result.bootstrap.ok,true);assert.equal(result.diagnostics[0].captcha,true);assert.equal(result.lastAttempt.lastState.authenticated,true);
+ const result=f.host.status().slots[0];assert.equal(closed,0);assert.equal(reads,3);assert.equal(result.open,true);assert.equal(result.closable,true);assert.equal(result.stopped,false);assert.equal(result.paused,true);assert.equal(result.status,'verification');assert.equal(result.stage,'before-start');assert.equal(result.bootstrap.ok,true);assert.equal(result.diagnostics[0].captcha,true);assert.equal(result.lastAttempt.lastState.authenticated,true);
  }finally{await f.done();}});
-test('verification after search starts also closes the browser and blocks native reconnects',async()=>{const f=await fixture();try{
+test('verification after search pauses the browser and mutes forwarding without retries',async()=>{const f=await fixture();try{
  let closed=0;f.host.slots[0].browser.close=async()=>closed++;f.host.slots[0].stage='searching';
  f.states[0]={status:'verification',connected:false,detail:'Nekto requires verification.'};
- await f.host.tick();await f.host.tick();assert.equal(closed,1);assert.equal(f.host.status().slots[0].stopped,true);assert.equal(f.host.requested,false);assert.equal(f.routes.at(-1),false);
+ await f.host.tick();await f.host.tick();assert.equal(closed,0);assert.equal(f.host.status().slots[0].paused,true);assert.equal(f.host.status().slots[0].stopped,false);assert.equal(f.host.requested,false);assert.equal(f.routes.at(-1),false);
  }finally{await f.done();}});
 
 test('a native prompt stops Start once and preserves the actual explanation instead of timing out',async()=>{const f=await fixture();try{
  const s=f.host.slots[0];let reads=0,closed=0;s.browser.close=async()=>closed++;f.host.prepare=async()=>s;
  f.host.state=async slot=>slot===s?(reads++,{status:'attention',connected:false,detail:'Nekto requires microphone permission.',authenticated:true,socketConnected:true}):f.states[1];
  await assert.rejects(f.host.start(0),/microphone permission/);await f.host.tick();
- const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,true);assert.equal(closed,1);assert.equal(reads,1);assert.equal(status.lastAttempt.lastState.status,'attention');
+ const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,false);assert.equal(status.paused,true);assert.equal(closed,0);assert.equal(reads,2);assert.equal(status.lastAttempt.lastState.status,'attention');
  }finally{await f.done();}});
 
 test('microphone diagnosis selects the assigned source and omits device metadata',async()=>{

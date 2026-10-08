@@ -91,10 +91,11 @@ const server=http.createServer(async(req,res)=>{try{
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
  if(url.pathname==='/api/audio/status'&&req.method==='GET'){await audio.loaded;return json(res,200,audio.status());}
  if(url.pathname==='/api/audio/tokens'&&req.method==='GET'){await audio.loaded;return json(res,200,{tokens:audio.tokens});}
- const audioScreen=url.pathname.match(/^\/api\/audio\/([01])\/screen$/);if(audioScreen&&req.method==='GET'){const frame=await audio.screen(Number(audioScreen[1]));if(!frame){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'no-store','X-Screen-Time':String(frame.at)});return res.end(frame.bytes);}
+ const audioScreen=url.pathname.match(/^\/api\/audio\/([01])\/screen$/);if(audioScreen&&req.method==='GET'){const frame=await audio.screen(Number(audioScreen[1]));if(!frame){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'no-store','X-Screen-Time':String(frame.at),'X-Screen-Epoch':frame.epoch});return res.end(frame.bytes);}
  if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
   if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
+   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect)$/);if(control)return json(res,200,control[2]==='input'?await audio.input(Number(control[1]),b):await audio.inspect(Number(control[1])));
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
    const single=url.pathname.match(/^\/api\/audio\/([01])\/token$/);if(single)return json(res,200,await audio.applySingle(Number(single[1]),b.token));
    const check=url.pathname.match(/^\/api\/audio\/([01])\/check$/);if(check)return json(res,200,await audio.applySingle(Number(check[1]),b.token,{startCall:false}));
