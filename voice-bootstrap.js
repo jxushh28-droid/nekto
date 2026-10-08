@@ -1,7 +1,3 @@
-// Keep the operator's token pinned for the life of the page, the way an
-// always-on content script would: whenever anything replaces it, re-write the
-// token back into both localStorage and the live client store so browser A
-// never drifts off the configured token. Runs from document-start onward.
 // Same idempotent storage write used by the operator's console snippet.
 // Runs in the selected existing page immediately before its Start click.
 export function applyVoiceStorageToken(token){
@@ -22,28 +18,13 @@ export function applyVoiceStorageToken(token){
  return {ok,changed,savedTokenMatches:ok};
 }
 
-export function pinVoiceToken(token) {
-  if (location.origin !== 'https://nekto-me.kz') return;
-  if (typeof token !== 'string' || !token) return;
-  const KEY = 'storage_audio_v2';
-  const apply = () => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {};
-      if (saved && typeof saved === 'object' && !Array.isArray(saved) && saved.user?.authToken !== token) {
-        saved.user = saved.user || {};
-        saved.user.authToken = token;
-        localStorage.setItem(KEY, JSON.stringify(saved));
-      }
-    } catch {}
-    try {
-      for (const el of document.querySelectorAll('*')) {
-        const state = el.__vue__?.$store?.state;
-        if (state?.user && state.system && state.user.authToken !== token) state.user.authToken = token;
-      }
-    } catch {}
-  };
-  apply();
-  setInterval(apply, 250);
+// Context storage is seeded before the first page. Reload must observe the
+// latest explicit write rather than restore a token captured at browser creation.
+export function observeVoiceStorage() {
+ if(location.origin!=='https://nekto-me.kz')return;
+ let ok=false;
+ try{const token=JSON.parse(localStorage.getItem('storage_audio_v2')||'{}')?.user?.authToken;ok=typeof token==='string'&&!!token;}catch{}
+ window.__voiceTokenBootstrap={ok,reason:ok?'context-storage-before-page':'context-storage-unavailable',phase:'document-start'};
 }
 
 // The context already contains the token before page creation. This also

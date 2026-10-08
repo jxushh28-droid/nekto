@@ -5,7 +5,7 @@ import {AudioGraph} from './audio-graph.js';
 import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
-import {primeVoiceStorage,pinVoiceToken,applyVoiceStorageToken} from './voice-bootstrap.js';
+import {observeVoiceStorage,applyVoiceStorageToken} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
 import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
@@ -53,6 +53,7 @@ export class AudioHost{
     this.ops=new Set();
     this.attempts=[null,null];
     this.attemptTokens=new WeakMap();
+    this.storageReceipts=new WeakMap();
     this.screens=[null,null];
     this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
     this.timer=setInterval(()=>void this.tick(),500);
@@ -98,8 +99,7 @@ export class AudioHost{
 
       await context.grantPermissions(['microphone'],{origin:'https://nekto-me.kz'});
 
-      await context.addInitScript(primeVoiceStorage,this.tokens[i]);
-      await context.addInitScript(pinVoiceToken,this.tokens[i]);
+      await context.addInitScript(observeVoiceStorage);
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
@@ -300,6 +300,42 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     if(s?.wire?.sentTokenMatches===false||snapshot&&(!snapshot.clientFound||!snapshot.storageReadable||!snapshot.savedTokenMatches||!snapshot.liveTokenMatches))throw Object.assign(Error('Nekto voice token changed in the active session. The bridge is disabled. Disconnect this side before applying your saved token again.'),{code:'TOKEN_MISMATCH'});
   }
 
+  async writeCurrentToken(i,s,token,phase){
+    this.storageReceipts.delete(s);
+    const applied=await s.page.evaluate(applyVoiceStorageToken,token);
+    if(this.slots[i]!==s||s.stopped)throw Error('Audio session changed before applying its token.');
+    s.storageApplication={phase,at:Date.now(),...applied};
+    this.recordAttempt(i,s);
+    if(!applied?.ok||!applied.savedTokenMatches)throw Error('Nekto voice token could not be written in the current browser.');
+    const actual=await s.page.evaluate(readVoiceStorageToken);
+    if(this.slots[i]!==s||s.stopped)throw Error('Audio session changed while reading its applied token.');
+    const receipt={slot:i,at:Date.now(),...actual,matchesInput:actual.storageReadable&&actual.token===token};
+    // Raw storage is returned only to this authenticated button request.
+    // It is never copied to status, attempt records, or Railway logs.
+    this.storageReceipts.set(s,receipt);
+    if(!receipt.matchesInput)throw Error('Nekto localStorage does not match the submitted token. The call has not been started.');
+    return receipt;
+  }
+
+  async applyCurrentToken(i,token){
+    const s=this.slots[i];
+    if(!s||!s.profileIdentity||s.stopped||s.crashed){await this.close(i);return;}
+    try{
+      await this.writeCurrentToken(i,s,token,'field-apply');
+      const inspection=await s.page.evaluate(inspectVoiceToken,token);
+      if(this.slots[i]!==s)throw Error('Audio session changed while applying its token.');
+      // localStorage writes do not update Vue's already authenticated identity.
+      // Let a normal reload hydrate the new token and register it natively.
+      if(s.profileIdentity!==token||!inspection.liveTokenMatches){
+        s.profileIdentity=token;
+        await this.reloadNative(i,s);
+      }
+    }catch(e){
+      if(this.slots[i]===s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}
+      throw Error(this.error(e));
+    }
+  }
+
   async start(i){
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
     if(this.slots[i]?.paused)throw Error('Audio session is paused. Complete the check using its native screen before starting a call.');
@@ -334,11 +370,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           const cookies=s.page.locator('#acceptCookies');
           if(await cookies.isVisible()&&await cookies.isEnabled())await cookies.click({timeout:800}).catch(()=>{});
           if(s.profileIdentity){
-            const applied=await s.page.evaluate(applyVoiceStorageToken,s.profileIdentity);
-            if(this.slots[i]!==s||s.stopped)throw Error('Audio session changed before applying its token.');
-            s.storageApplication={phase:'before-start',at:Date.now(),...applied};
-            this.recordAttempt(i,s);
-            if(!applied?.ok||!applied.savedTokenMatches)throw Error('Nekto voice token could not be written in the current browser before Start.');
+            await this.writeCurrentToken(i,s,s.profileIdentity,'before-start');
           }
           this.assertToken(await this.inspectToken(i,s,'before-start'),s);
           s.stage='start-click';
@@ -374,11 +406,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       const saved=await saveTokens(this.data,values);
       this.enabled=false;
       if(this.graph.process)await this.graph.routing(false);
-      for(let i=0;i<2;i++){
-        const existing=this.slots[i];
-        if(!existing||existing.stopped||existing.crashed||existing.profileIdentity!==saved[i])await this.close(i);
-      }
       this.tokens=saved;
+      for(let i=0;i<2;i++)await this.applyCurrentToken(i,saved[i]);
       this.requested=!!consent;
     }finally{
       this.setup=false;
@@ -396,25 +425,26 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       const values=[...this.tokens];
       values[i]=token;
       const saved=await saveAudioTokens(this.data,values);
-      const existing=this.slots[i];
-      const reuse=startCall&&existing&&!existing.stopped&&!existing.crashed&&existing.profileIdentity===saved[i];
-      if(!reuse)await this.close(i);
-      else{this.enabled=false;if(this.graph.process)await this.graph.routing(false);}
+      this.enabled=false;if(this.graph.process)await this.graph.routing(false);
       this.tokens=saved;
       this.requested=false;
+      await this.applyCurrentToken(i,saved[i]);
     }finally{
       this.setup=false;
     }
     try{
       if(startCall)await this.start(i);else await this.checkAuthorization(i);
-      return {ok:true,operation:startCall?'call':'authorization',results:[{slot:i,ok:true}]};
+      const s=this.slots[i];
+      if(s&&!s.stopped&&!this.storageReceipts.has(s))await this.writeCurrentToken(i,s,this.tokens[i],'field-apply');
+      return {ok:true,operation:startCall?'call':'authorization',application:s?this.storageReceipts.get(s)||null:null,results:[{slot:i,ok:true}]};
     }catch(e){
-      return {ok:false,results:[{slot:i,ok:false,error:this.error(e)}]};
+      return {ok:false,application:this.slots[i]?this.storageReceipts.get(this.slots[i])||null:null,results:[{slot:i,ok:false,error:this.error(e)}]};
     }
   }
 
   async checkAuthorization(i){
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
+    if(this.slots[i]?.paused)throw Error('Nekto requires verification for this voice session.');
     this.ops.add(i);this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare'};
     this.attemptTokens.set(this.attempts[i],this.tokens?.[i]);
     try{const s=await this.prepare(i);s.stage='authorized-no-call';this.recordAttempt(i,s);}
@@ -787,13 +817,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     }finally{clearTimeout(timer);s.page.off('console',onConsole);this.ops.delete(i);}
   }
 
-  async reloadPage(i,epoch){
-    const s=this.slots[i];
-    if(!s||s.stopped||s.crashed)throw Error('Audio browser is closed. Open this side without search first.');
-    if(epoch!==s.epoch)throw Error('Audio session changed. Reload the current browser again.');
-    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
-    this.ops.add(i);
-    try{
+  // Caller owns the side operation or the configuration lock.
+  async reloadNative(i,s){
       if(new URL(s.page.url()).origin!=='https://nekto-me.kz')throw Error('Audio native browser left Nekto.');
       this.requested=false;this.enabled=false;
       if(this.graph.process)await this.graph.routing(false);
@@ -809,6 +834,16 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       await this.prepare(i);
       s.stage='authorized-no-call';this.recordAttempt(i,s);
       await this.captureScreen(i,s,true);
+  }
+
+  async reloadPage(i,epoch){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed)throw Error('Audio browser is closed. Open this side without search first.');
+    if(epoch!==s.epoch)throw Error('Audio session changed. Reload the current browser again.');
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    this.ops.add(i);
+    try{
+      await this.reloadNative(i,s);
       return {ok:true,operation:'authorization',results:[{slot:i,ok:true}]};
     }catch(e){
       if(this.slots[i]===s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}

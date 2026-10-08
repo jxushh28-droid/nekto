@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
@@ -115,5 +115,44 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
    assert.equal(slot.callToken.after.savedTokenMatches,true);assert.equal(slot.callToken.after.liveTokenMatches,true);
    assert.equal(slot.wire.sentTokenMatches,true);assert.equal(slot.wire.registrationSucceeded,true);
   }
+  // Exercise the actual dashboard button against the actual native AudioHost.
+  // Start from a page with a different loaded identity and a console storage edit.
+  const nativePage=host.slots[0].page,nativeContext=host.slots[0].context,other=host.slots[1],epoch=host.slots[0].epoch;
+  await nativePage.evaluate(()=>{const saved=JSON.parse(localStorage.getItem('storage_audio_v2'));saved.user.authToken='manual-console-fixture';localStorage.setItem('storage_audio_v2',JSON.stringify(saved));});
+  await nativePage.waitForTimeout(600);
+  assert.equal(await nativePage.evaluate(()=>JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken),'manual-console-fixture');
+  assert.equal(await nativePage.evaluate(()=>document.querySelector('#app').__vue__.$store.state.user.authToken),'fixture-token-A');
+  const dashboardContext=await browsers[0].newContext(),submissions=[],base='https://dashboard.fixture';
+  await dashboardContext.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.endsWith('/status'))return route.fulfill({json:host.status()});
+   if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:host.tokens}});
+   if(path.endsWith('/screen'))return route.fulfill({status:204});
+   if(path.endsWith('/storage')){const slot=Number(path.split('/')[3]);const result=await host.storageToken(slot,route.request().postDataJSON().epoch);return route.fulfill({json:result,headers:{'X-Audio-Epoch':result.browserEpoch}});}
+   if(path==='/api/audio/0/token'){
+    const data=route.request().postDataJSON();submissions.push(data);
+    return route.fulfill({json:await host.applySingle(0,data.token)});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const dashboard=await dashboardContext.newPage();await dashboard.goto(base+'/audio');
+  await dashboard.waitForFunction(()=>!document.querySelector('#hub').hidden);
+  await dashboard.locator('#tokenA').fill('button-replacement-fixture');
+  await dashboard.locator('#applyTokens').click();
+  await dashboard.waitForFunction(()=>document.querySelector('#card0 .applicationReceipt').textContent.includes('button-replacement-fixture'),null,{timeout:20000});
+  assert.deepEqual(submissions,[{token:'button-replacement-fixture'}]);assert.equal(browsers.length,2);
+  assert.equal(host.slots[0].page,nativePage);assert.equal(host.slots[0].context,nativeContext);assert.equal(host.slots[1],other);
+  assert.notEqual(host.slots[0].epoch,epoch);
+  assert.equal(await nativePage.evaluate(()=>window.firstScriptToken),'button-replacement-fixture');
+  assert.equal(await nativePage.evaluate(()=>window.startToken),'button-replacement-fixture');
+  assert.equal(await nativePage.evaluate(()=>localStorage.getItem('operator-console-fixture')),'console-storage-0');
+  assert.equal(host.slots[0].wire.sentTokenMatches,true);assert.equal(host.slots[0].wire.registrationSucceeded,true);
+  assert.match(await dashboard.locator('#card0 .applicationReceipt').textContent(),/https:\/\/nekto-me.kz.*Совпадает/);
+  // A later reload must hydrate the replacement, without clicking Start again.
+  await host.reloadPage(0,host.slots[0].epoch);
+  assert.equal(await nativePage.evaluate(()=>window.firstScriptToken),'button-replacement-fixture');
+  assert.equal(await nativePage.evaluate(()=>window.startToken),undefined);
+  await dashboardContext.close();
  }finally{await host.shutdown();for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
 });
