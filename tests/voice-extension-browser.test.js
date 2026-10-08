@@ -99,7 +99,16 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
    for(const frame of slot.page.frames())assert.equal(await frame.evaluate(()=>window.firstScriptToken),host.tokens[side]);
   }
   assert.notEqual(host.slots[0].context,host.slots[1].context);
-  await Promise.all([host.start(0),host.start(1)]);
+  const originalSlots=[...host.slots];
+  for(const side of [0,1])await host.slots[side].page.evaluate(side=>{window.operatorConsoleMarker='console-page-'+side;localStorage.setItem('operator-console-fixture','console-storage-'+side);},side);
+  await host.apply([...host.tokens],false);
+  assert.equal(browsers.length,2);
+  for(const side of [0,1]){
+   assert.equal(host.slots[side],originalSlots[side]);
+   assert.equal(await host.slots[side].page.evaluate(()=>window.operatorConsoleMarker),'console-page-'+side);
+   assert.equal(await host.slots[side].page.evaluate(()=>localStorage.getItem('operator-console-fixture')),'console-storage-'+side);
+   assert.equal(host.slots[side].storageApplication.ok,true);
+  }
   for(const side of [0,1]){
    const slot=host.slots[side];assert.equal(await slot.page.evaluate(()=>window.startToken),host.tokens[side]);
    assert.equal(slot.callToken.before.savedTokenMatches,true);assert.equal(slot.callToken.before.liveTokenMatches,true);

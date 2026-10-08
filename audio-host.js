@@ -5,7 +5,7 @@ import {AudioGraph} from './audio-graph.js';
 import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
-import {primeVoiceStorage,pinVoiceToken} from './voice-bootstrap.js';
+import {primeVoiceStorage,pinVoiceToken,applyVoiceStorageToken} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
 import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
@@ -333,6 +333,13 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         if(!clicked&&state?.authenticated&&state?.socketConnected&&await s.page.locator('#searchCompanyBtn').isVisible()){
           const cookies=s.page.locator('#acceptCookies');
           if(await cookies.isVisible()&&await cookies.isEnabled())await cookies.click({timeout:800}).catch(()=>{});
+          if(s.profileIdentity){
+            const applied=await s.page.evaluate(applyVoiceStorageToken,s.profileIdentity);
+            if(this.slots[i]!==s||s.stopped)throw Error('Audio session changed before applying its token.');
+            s.storageApplication={phase:'before-start',at:Date.now(),...applied};
+            this.recordAttempt(i,s);
+            if(!applied?.ok||!applied.savedTokenMatches)throw Error('Nekto voice token could not be written in the current browser before Start.');
+          }
           this.assertToken(await this.inspectToken(i,s,'before-start'),s);
           s.stage='start-click';
           console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',attemptId:s.epoch,phase:'before-click',authenticated:state.authenticated,socketConnected:state.socketConnected,registrationError:state.registrationError||0}));
@@ -365,8 +372,12 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     try{
       await this.loaded;
       const saved=await saveTokens(this.data,values);
-      await this.close(0);
-      await this.close(1);
+      this.enabled=false;
+      if(this.graph.process)await this.graph.routing(false);
+      for(let i=0;i<2;i++){
+        const existing=this.slots[i];
+        if(!existing||existing.stopped||existing.crashed||existing.profileIdentity!==saved[i])await this.close(i);
+      }
       this.tokens=saved;
       this.requested=!!consent;
     }finally{
@@ -385,7 +396,10 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       const values=[...this.tokens];
       values[i]=token;
       const saved=await saveAudioTokens(this.data,values);
-      await this.close(i);
+      const existing=this.slots[i];
+      const reuse=startCall&&existing&&!existing.stopped&&!existing.crashed&&existing.profileIdentity===saved[i];
+      if(!reuse)await this.close(i);
+      else{this.enabled=false;if(this.graph.process)await this.graph.routing(false);}
       this.tokens=saved;
       this.requested=false;
     }finally{
@@ -421,7 +435,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,appliedToken:tokenFingerprint(s.profileIdentity),stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attempts[i]={attemptId:s.epoch,appliedToken:tokenFingerprint(s.profileIdentity),stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,storageApplication:s.storageApplication?{...s.storageApplication}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
     this.attemptTokens.set(this.attempts[i],s.profileIdentity);
   }
 
@@ -540,6 +554,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         appliedToken:tokenFingerprint(s?.profileIdentity??this.tokens?.[i]),
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
+        storageApplication:s?.storageApplication||null,
         lastAttempt:this.attemptDiagnostic(i),
         status:s?.status||'closed',
         connected:!!s?.connected,
@@ -785,7 +800,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       this.stopCapture(i);
       for(const r of this.clients[i]){r.write('event: closed\ndata: {}\n\n');r.end();}
       this.clients[i].clear();this.screens[i]=null;
-      Object.assign(s,{epoch:crypto.randomUUID(),prepared:false,connected:false,paused:false,stage:'reload',status:'loading',error:'',operationError:'',failureStatus:null,authorization:null,tokenInspection:null,callToken:null,microphone:null,wire:{registrationSent:false,sentTokenMatches:null,registrationReceived:false,registrationSucceeded:null,registrationError:null,lastResult:null}});
+      Object.assign(s,{epoch:crypto.randomUUID(),prepared:false,connected:false,paused:false,stage:'reload',status:'loading',error:'',operationError:'',failureStatus:null,authorization:null,tokenInspection:null,callToken:null,storageApplication:null,microphone:null,wire:{registrationSent:false,sentTokenMatches:null,registrationReceived:false,registrationSucceeded:null,registrationError:null,lastResult:null}});
       this.recordAttempt(i,s);
       await s.page.reload({waitUntil:'domcontentloaded',timeout:45000});
       if(this.slots[i]!==s)throw Error('Audio session changed during reload.');
