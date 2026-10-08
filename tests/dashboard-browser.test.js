@@ -75,6 +75,34 @@ test('single-side audio test accepts one token, never submits B, and retains A a
   assert.deepEqual(submissions[1],{path:'/api/audio/0/check',data:{token:'single-fixture-token'}});assert.equal(submissions.length,2);
  }finally{await browser.close();}
 });
+test('card Connect applies the token typed in the field, and reconnects with the saved token when the field is empty',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();let saved=[null,null];const submissions=[];
+  const status={enabled:false,requested:false,setup:false,configured:[false,false],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:0,db:-60}))};
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.startsWith('/api/')){
+    if(route.request().method()==='POST'){
+     submissions.push({path:url.pathname,data:JSON.parse(route.request().postData()||'{}')});
+     if(url.pathname.endsWith('/token'))saved[Number(url.pathname.split('/')[3])]=submissions.at(-1).data.token;
+     body=JSON.stringify({ok:true,operation:url.pathname.endsWith('/token')?'call':undefined,results:[{slot:Number(url.pathname.split('/')[3]),ok:true}]});
+    }else body=JSON.stringify(url.pathname.endsWith('/tokens')?{tokens:saved}:status);
+   }else{
+    const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';
+   }
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>!document.querySelector('#hub').hidden);
+  // Field holds a token for side A: pressing Connect must apply exactly that token.
+  await page.locator('#tokenA').fill('typed-connect-token');
+  await page.locator('#card0 .connect').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('поиск запущен'));
+  assert.deepEqual(submissions,[{path:'/api/audio/0/token',data:{token:'typed-connect-token'}}]);
+  // Side B field is empty: Connect reconnects with the saved token, sending no credential.
+  assert.equal(await page.locator('#tokenB').inputValue(),'');
+  await page.locator('#card1 .connect').click();await page.waitForFunction(()=>/\bB:/.test(document.querySelector('#tokenResult').textContent));
+  assert.deepEqual(submissions[1],{path:'/api/audio/1/start',data:{}});assert.equal(submissions.length,2);
+ }finally{await browser.close();}
+});
 
 test('audio panel shows the native screen and keeps the final failure image visible',async()=>{
  const browser=await chromium.launch({headless:true});try{
