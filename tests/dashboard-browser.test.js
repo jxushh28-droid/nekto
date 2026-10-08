@@ -233,3 +233,28 @@ test('storage is visible while startup is busy and native reload does not submit
   assert.equal(await page.locator('#reloadDashboard').isVisible(),true);
  }finally{await browser.close();}
 });
+
+test('native console submits pasted code to the selected browser and renders output as text',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),submissions=[];const epochs=['console-A','console-B'];
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.endsWith('/screen'))return route.fulfill({status:204});
+   if(path.endsWith('/console')){
+    const slot=Number(path.split('/')[3]);submissions.push({slot,data:route.request().postDataJSON()});
+    return route.fulfill({headers:{'X-Audio-Epoch':epochs[slot]},json:{ok:true,slot,pageURL:'https://nekto-me.kz/audiochat',at:Date.now(),value:'actual-console-token-'+slot,logs:[{type:'log',text:'<img src=x onerror=alert(1)>'}]}});
+   }
+   if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:['different-input-A','different-input-B']}});
+   if(path.endsWith('/status'))return route.fulfill({json:{enabled:false,setup:false,configured:[true,true],slots:epochs.map(epoch=>({open:true,busy:false,attemptId:epoch,status:'verification',paused:true}))}});
+   const file=path==='/audio'?'audio.html':path.slice(1);return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>document.querySelector('#tokenB').value==='different-input-B');
+  await page.locator('#card1 .nativeConsole summary').click();
+  const code="JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken";
+  await page.locator('#card1 .consoleCode').fill(code);await page.locator('#card1 .consoleRun').click();
+  await page.waitForFunction(()=>document.querySelector('#card1 .consoleOutput').textContent.includes('actual-console-token-1'));
+  assert.deepEqual(submissions,[{slot:1,data:{epoch:'console-B',code}}]);assert.match(await page.locator('#card1 .consolePage').textContent(),/Браузер B.*https:\/\/nekto-me.kz\/audiochat/);
+  assert.equal(await page.locator('#card1 .consoleOutput img').count(),0);assert.equal(await page.locator('#tokenB').inputValue(),'different-input-B');
+  assert.equal(await page.locator('#card0 .consoleOutput').textContent(),'');
+ }finally{await browser.close();}
+});

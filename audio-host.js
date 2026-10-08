@@ -11,6 +11,7 @@ import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
 import {inspectVoiceToken,readVoiceStorageToken} from './voice-inspection.js';
 import {validateNativeInput} from './native-input.js';
+import {formatNativeConsoleValue} from './native-console.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -738,6 +739,37 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       // The browser epoch is transport metadata, separate from displayed token aliases.
       return Object.defineProperty({...value,open:true,slot:i,runId:s.profileIdentity??null,sessionId:s.profileIdentity??null,at:Date.now()},'browserEpoch',{value:s.epoch});
     }finally{clearTimeout(timer);}
+  }
+
+  async console(i,{epoch,code}={}){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed)throw Error('Audio browser is closed. Open this side without search first.');
+    if(epoch!==s.epoch)throw Error('Audio session changed. Run the console in the current browser again.');
+    if(typeof code!=='string'||!code.trim()||code.length>8000)throw Error('Audio console requires 1–8000 characters of JavaScript.');
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    if(new URL(s.page.url()).origin!=='https://nekto-me.kz')throw Error('Audio native browser left Nekto.');
+    this.ops.add(i);
+    const logs=[];
+    const onConsole=message=>{if(logs.length<20)logs.push({type:message.type(),text:message.text().slice(0,2000)});};
+    let timer;
+    s.page.on('console',onConsole);
+    try{
+      // The string goes directly to Playwright's native-page JavaScript engine.
+      // No configured token, dashboard storage, or server-side eval is used.
+      const evaluation=(async()=>{
+        const handle=await s.page.evaluateHandle(code);
+        try{return await handle.evaluate(formatNativeConsoleValue);}finally{await handle.dispose().catch(()=>{});}
+      })();
+      let result;
+      try{
+        const value=await Promise.race([evaluation,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Audio console exceeded 8 seconds. Reload this browser to stop the script.')),8000);})]);
+        result={ok:true,value};
+      }catch(e){result={ok:false,error:String(e?.message||e).slice(0,2000)};}
+      if(this.slots[i]!==s||s.epoch!==epoch||s.stopped||s.crashed)throw Error('Audio session changed during console execution.');
+      if(new URL(s.page.url()).origin!=='https://nekto-me.kz')throw Error('Audio native browser left Nekto.');
+      this.screens[i]=null;
+      return Object.defineProperty({...result,logs,slot:i,pageURL:s.page.url(),at:Date.now()},'browserEpoch',{value:epoch});
+    }finally{clearTimeout(timer);s.page.off('console',onConsole);this.ops.delete(i);}
   }
 
   async reloadPage(i,epoch){

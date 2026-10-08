@@ -95,10 +95,10 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
   if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
-   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|storage|reload)$/);if(control){
+   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|storage|reload|console)$/);if(control){
     const i=Number(control[1]);
-    const result=control[2]==='input'?await audio.input(i,b):control[2]==='storage'?await audio.storageToken(i,b.epoch):control[2]==='reload'?await audio.reloadPage(i,b.epoch):await audio.inspect(i);
-    if(control[2]==='storage'&&result.browserEpoch)res.setHeader('X-Audio-Epoch',result.browserEpoch);
+    const result=control[2]==='input'?await audio.input(i,b):control[2]==='storage'?await audio.storageToken(i,b.epoch):control[2]==='reload'?await audio.reloadPage(i,b.epoch):control[2]==='console'?await audio.console(i,b):await audio.inspect(i);
+    if(['storage','console'].includes(control[2])&&result.browserEpoch)res.setHeader('X-Audio-Epoch',result.browserEpoch);
     return json(res,200,result);
    }
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
