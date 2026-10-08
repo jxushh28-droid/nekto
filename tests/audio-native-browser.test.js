@@ -54,3 +54,18 @@ test('storage inspection reads different actual values from isolated Chromium si
   }
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
 });
+
+test('native reload uses the same Chromium context and preserves storage before any search',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'reload-browser-')),browser=await chromium.launch({headless:true});
+ const host=new AudioHost({data:dir,graph:{process:false,close:async()=>{}}});clearInterval(host.timer);await host.loaded;
+ try{
+  const context=await browser.newContext();await context.addInitScript(primeVoiceStorage,'reload-fixture-token');
+  await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><script>window.firstToken=JSON.parse(localStorage.getItem("storage_audio_v2")).user.authToken;</script><body>Reload fixture</body>'}));
+  const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');await page.evaluate(()=>localStorage.setItem('fixture-settings','preserved'));
+  const s=host.slots[0]={browser,context,page,epoch:'before-reload',profileIdentity:'reload-fixture-token',prepared:true};
+  host.prepare=async()=>{assert.equal(s.bootstrap.ok,true);assert.equal(s.bootstrap.phase,'document-start');s.prepared=true;s.status='ready';return s;};
+  const r=await host.reloadPage(0,s.epoch);assert.equal(r.operation,'authorization');assert.equal(host.slots[0].page,page);assert.equal(host.slots[0].context,context);
+  assert.equal(await page.evaluate(()=>window.firstToken),'reload-fixture-token');assert.equal(await page.evaluate(()=>localStorage.getItem('fixture-settings')),'preserved');
+  assert.equal((await host.storageToken(0,s.epoch)).token,'reload-fixture-token');assert.equal(s.stage,'authorized-no-call');assert.equal(context.pages().length,1);
+ }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
+});

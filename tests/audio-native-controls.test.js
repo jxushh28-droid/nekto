@@ -131,3 +131,26 @@ test('storage inspection uses the selected live page and rejects stale or closed
   assert.deepEqual(await host.storageToken(0,s.epoch),{open:false,token:null});
  }finally{await f.done();}
 });
+
+test('read-only storage inspection works during preparation without releasing its operation lock',async()=>{
+ const f=await fixture();try{
+  const {host,s}=f;host.setup=true;host.ops.add(0);
+  s.page.evaluate=async()=>({token:'before-search-fixture',storageReadable:true});
+  assert.equal((await host.storageToken(0,s.epoch)).token,'before-search-fixture');assert.equal(host.ops.has(0),true);assert.equal(host.setup,true);
+  host.setup=false;host.ops.delete(0);
+  const old=s.epoch;s.page.evaluate=async()=>{s.epoch='reloaded';return {token:'old-document'};};
+  await assert.rejects(host.storageToken(0,old),/changed/);
+ }finally{f.host.setup=false;f.host.ops.clear();await f.done();}
+});
+test('native reload retains page and identity, mutes the bridge, and never invokes Start',async()=>{
+ const f=await fixture();try{
+  const {host,s,routes}=f;const original=s.epoch,identity=s.profileIdentity,page=s.page,other=host.slots[1];let reloads=0,starts=0;
+  host.start=async()=>starts++;host.requested=true;host.enabled=true;s.prepared=true;s.paused=true;s.status='verification';
+  s.page.reload=async()=>reloads++;
+  host.prepare=async i=>{assert.equal(i,0);assert.equal(s.prepared,false);assert.equal(s.wire.registrationSent,false);return s;};
+  await assert.rejects(host.reloadPage(0,'stale'),/changed/);assert.equal(reloads,0);
+  const result=await host.reloadPage(0,original);
+  assert.equal(result.operation,'authorization');assert.equal(reloads,1);assert.equal(starts,0);assert.equal(s.page,page);assert.equal(s.profileIdentity,identity);assert.equal(host.slots[1],other);
+  assert.notEqual(s.epoch,original);assert.equal(s.stage,'authorized-no-call');assert.equal(host.requested,false);assert.equal(host.enabled,false);assert.equal(routes.at(-1),false);assert.equal(host.ops.size,0);
+ }finally{await f.done();}
+});

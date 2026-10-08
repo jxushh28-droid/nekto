@@ -205,7 +205,31 @@ test('localStorage token panel shows raw browser value, compares current input, 
   delay=true;await page.locator('#card0 .readStorage').click();await page.waitForFunction(()=>document.querySelector('#card0 .readStorage').disabled);
   epoch='replacement-run';await page.waitForTimeout(1200);release();
   await page.waitForFunction(()=>!document.querySelector('#card0 .readStorage').disabled);assert.equal(await page.locator('#card0 .storageToken').inputValue(),'');
-  open=false;await page.waitForFunction(()=>document.querySelector('#card0 .storageMatch').textContent.includes('Браузер закрыт'));
+  open=false;await page.waitForFunction(()=>document.querySelector('#card0 .storageMatch').textContent.includes('Откройте браузер без поиска'));
   assert.equal(await page.locator('#card0 .readStorage').isDisabled(),true);
+ }finally{await browser.close();}
+});
+
+test('storage is visible while startup is busy and native reload does not submit Start',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),posts=[];let epoch='before-search',busy=true,open=true;
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.endsWith('/screen'))return route.fulfill({status:204});
+   if(path.endsWith('/storage')){posts.push({path,data:route.request().postDataJSON()});return route.fulfill({json:{open:true,slot:0,runId:epoch,token:'before-search-token',storageReadable:true,at:Date.now()}});}
+   if(path.endsWith('/reload')){posts.push({path,data:route.request().postDataJSON()});epoch='after-reload';return route.fulfill({json:{ok:true,operation:'authorization',results:[{slot:0,ok:true}]}});}
+   if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:['before-search-token',null]}});
+   if(path.endsWith('/status'))return route.fulfill({json:{enabled:false,setup:false,configured:[true,false],slots:[{open,busy,storageAvailable:true,attemptId:epoch,status:'loading'},{open:false,busy:false,status:'closed'}]}});
+   const file=path==='/audio'?'audio.html':path.slice(1);return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>document.querySelector('#card0 .storageToken').value==='before-search-token');
+  assert.match(await page.locator('#card0 .storageMatch').textContent(),/^Совпадает/);
+  assert.equal(await page.locator('#card0 .readStorage').isDisabled(),false);assert.equal(await page.locator('#card0 .reloadNative').isDisabled(),true);
+  busy=false;await page.waitForFunction(()=>!document.querySelector('#card0 .reloadNative').disabled);
+  await page.locator('#card0 .reloadNative').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('звонок не начат'));
+  await page.waitForFunction(()=>document.querySelector('#card0 .storageToken').value==='before-search-token');
+  assert.deepEqual(posts.find(x=>x.path.endsWith('/reload')),{path:'/api/audio/0/reload',data:{epoch:'before-search'}});
+  assert.ok(posts.every(x=>/\/(storage|reload)$/.test(x.path)));assert.equal(await page.locator('#tokenA').inputValue(),'before-search-token');
+  assert.equal(await page.locator('#reloadDashboard').isVisible(),true);
  }finally{await browser.close();}
 });
