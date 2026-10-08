@@ -186,9 +186,9 @@ test('localStorage token panel shows raw browser value, compares current input, 
   await context.route(base+'/**',async route=>{
    const path=new URL(route.request().url()).pathname;
    if(path.endsWith('/storage')){
-    reads.push({path,data:route.request().postDataJSON()});const sessionId=epoch;
+    reads.push({path,data:route.request().postDataJSON()});const browserEpoch=epoch;
     if(delay)await new Promise(resolve=>release=resolve);
-    return route.fulfill({json:{open:true,slot:0,runId:'operator-token-alias',sessionId,at:Date.now(),token:'actual-native-token',storageReadable:true}});
+    return route.fulfill({headers:{'X-Audio-Epoch':browserEpoch},json:{open:true,slot:0,runId:'operator-token-alias',sessionId:'operator-token-alias',at:Date.now(),token:'actual-native-token',storageReadable:true}});
    }
    if(path.endsWith('/screen'))return route.fulfill({status:204});
    if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:['configured-token',null]}});
@@ -216,7 +216,7 @@ test('storage is visible while startup is busy and native reload does not submit
   await context.route(base+'/**',async route=>{
    const path=new URL(route.request().url()).pathname;
    if(path.endsWith('/screen'))return route.fulfill({status:204});
-   if(path.endsWith('/storage')){posts.push({path,data:route.request().postDataJSON()});return route.fulfill({json:{open:true,slot:0,runId:'before-search-token',sessionId:epoch,token:'before-search-token',storageReadable:true,at:Date.now()}});}
+   if(path.endsWith('/storage')){posts.push({path,data:route.request().postDataJSON()});return route.fulfill({headers:{'X-Audio-Epoch':epoch},json:{open:true,slot:0,runId:'before-search-token',sessionId:'before-search-token',token:'before-search-token',storageReadable:true,at:Date.now()}});}
    if(path.endsWith('/reload')){posts.push({path,data:route.request().postDataJSON()});epoch='after-reload';return route.fulfill({json:{ok:true,operation:'authorization',results:[{slot:0,ok:true}]}});}
    if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:['before-search-token',null]}});
    if(path.endsWith('/status'))return route.fulfill({json:{enabled:false,setup:false,configured:[true,false],slots:[{open,busy,storageAvailable:true,attemptId:epoch,status:'loading'},{open:false,busy:false,status:'closed'}]}});

@@ -430,7 +430,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     const attempt=this.attempts[i];
     if(!attempt)return null;
     const token=this.attemptTokens.get(attempt)??null;
-    return {...attempt,attemptId:token,runId:token,sessionId:attempt.attemptId};
+    return {...attempt,attemptId:token,runId:token,sessionId:token};
   }
 
   async persistProfile(i,s){
@@ -735,7 +735,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     try{
       const value=await Promise.race([s.page.evaluate(readVoiceStorageToken),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Audio browser did not respond.')),5000);})]);
       if(this.slots[i]!==s||s.epoch!==epoch||s.stopped||s.crashed)throw Error('Audio session changed during storage inspection.');
-      return {...value,open:true,slot:i,runId:s.profileIdentity??null,sessionId:s.epoch,at:Date.now()};
+      // The browser epoch is transport metadata, separate from displayed token aliases.
+      return Object.defineProperty({...value,open:true,slot:i,runId:s.profileIdentity??null,sessionId:s.profileIdentity??null,at:Date.now()},'browserEpoch',{value:s.epoch});
     }finally{clearTimeout(timer);}
   }
 

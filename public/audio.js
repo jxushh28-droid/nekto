@@ -2,7 +2,7 @@ const $=id=>document.getElementById(id),feeds=[null,null],nodes=[new Set(),new S
 const screenURLs=[null,null],screenPending=[false,false],screenTimes=[0,0];
 const screenEpochs=[null,null],screenControl=[false,false];
 const statuses={closed:'Не подключён',loading:'Подключаемся…',ready:'Готов',searching:'Ищем собеседника…',connected:'Собеседник подключён',ended:'Собеседник отключился',verification:'Сайт требует проверку',blocked:'Сайт отказал в подключении',attention:'Сайт требует действие',error:'Ошибка'};
-async function api(path,data){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});const result=await r.json();if(!r.ok){if(r.status===401){$('login').hidden=false;$('hub').hidden=true;}throw Error(result.error||'Ошибка запроса');}return result;}
+async function api(path,data){const r=await fetch('/api/'+path,{method:data===undefined?'GET':'POST',headers:data===undefined?{}:{'Content-Type':'application/json'},body:data===undefined?undefined:JSON.stringify(data)});const result=await r.json();if(!r.ok){if(r.status===401){$('login').hidden=false;$('hub').hidden=true;}throw Error(result.error||'Ошибка запроса');}const epoch=r.headers.get('X-Audio-Epoch');if(epoch)Object.defineProperty(result,'browserEpoch',{value:epoch});return result;}
 function fail(e){$('error').textContent=e.message;}
 function stop(i){feeds[i]?.close();feeds[i]=null;for(const n of nodes[i]){try{n.stop();}catch{}}nodes[i].clear();schedule[i]=0;}
 function attach(i){if(!enabled[i]||!snapshot?.slots[i]?.open||feeds[i])return;const feed=feeds[i]=new EventSource('/api/audio/'+i+'/stream');feed.onmessage=e=>{if(!enabled[i]||!context||context.state!=='running')return;try{const p=JSON.parse(e.data),raw=atob(p.data),length=Math.floor(raw.length/2),buffer=context.createBuffer(1,length,p.rate),samples=buffer.getChannelData(0);for(let n=0;n<length;n++){let v=raw.charCodeAt(n*2)|(raw.charCodeAt(n*2+1)<<8);if(v>32767)v-=65536;samples[n]=v/32768*volume[i];}const now=context.currentTime;if(schedule[i]<now||schedule[i]>now+.4)schedule[i]=now+.08;const source=context.createBufferSource();source.buffer=buffer;source.connect(context.destination);nodes[i].add(source);source.onended=()=>nodes[i].delete(source);source.start(schedule[i]);schedule[i]+=buffer.duration;}catch{}};feed.addEventListener('closed',()=>{enabled[i]=false;stop(i);const button=$('card'+i).querySelector('.listen');button.textContent='Слушать '+(i?'B':'A');button.setAttribute('aria-pressed','false');});}
@@ -25,7 +25,7 @@ async function refreshScreen(i,x){
 const storageSnapshots=[null,null],storagePending=[false,false],storageReadTimes=[0,0];
 function updateStorageView(i){
  const card=$('card'+i),x=snapshot?.slots[i],value=storageSnapshots[i];
- if(value&&(!x?.open||value.sessionId!==x.attemptId))storageSnapshots[i]=null;
+ if(value&&(!x?.open||value.browserEpoch!==x.attemptId))storageSnapshots[i]=null;
  const current=storageSnapshots[i],typed=$('token'+(i?'B':'A')).value.trim();
  card.querySelector('.readStorage').disabled=storagePending[i]||!x?.open||x.storageAvailable===false;
  card.querySelector('.openWithoutSearch').disabled=pending||x?.busy;
@@ -51,7 +51,7 @@ async function readStorage(i){
  storagePending[i]=true;storageReadTimes[i]=Date.now();storageSnapshots[i]=null;updateStorageView(i);
  try{
   const result=await api('audio/'+i+'/storage',{epoch});
-  if(snapshot?.slots[i]?.attemptId===epoch&&result.open&&result.sessionId===epoch&&result.slot===i)storageSnapshots[i]=result;
+  if(snapshot?.slots[i]?.attemptId===epoch&&result.open&&result.browserEpoch===epoch&&result.slot===i)storageSnapshots[i]=result;
  }catch(e){if(!snapshot?.slots[i]?.busy)fail(e);}finally{storagePending[i]=false;updateStorageView(i);}
 }
 
