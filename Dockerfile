@@ -4,6 +4,6 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY . .
-RUN node --check server.js && node --check video-host.js && node --check yap-video-host.js && node --test tests/browser-profile.test.js tests/voice-wire.test.js tests/video-host.test.js tests/yap-video-host.test.js tests/video-session-config.test.js tests/video-frame-browser.test.js tests/audio-host.test.js tests/audio-native-controls.test.js tests/audio-native-browser.test.js tests/audio-runtime.test.js tests/audio-devices.test.js tests/server-open.test.js tests/dashboard-browser.test.js tests/voice-bootstrap.test.js tests/voice-extension-browser.test.js
+RUN node --check server.js && node --check video-host.js && node --check yap-video-host.js && node --test tests/browser-profile.test.js tests/voice-wire.test.js tests/video-host.test.js tests/yap-video-host.test.js tests/video-session-config.test.js tests/video-frame-browser.test.js tests/audio-host.test.js tests/audio-call-token.test.js tests/audio-runtime.test.js tests/audio-devices.test.js tests/server-open.test.js tests/dashboard-browser.test.js tests/voice-bootstrap.test.js tests/voice-extension-browser.test.js
 ENV NODE_ENV=production
 CMD ["node", "server.js"]
