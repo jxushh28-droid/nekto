@@ -31,8 +31,8 @@ test('native controls click, type, press keys and scroll in the existing browser
   await host.input(0,{epoch:s.epoch,action:'scroll',deltaY:600});
   assert.deepEqual(actions,[['click',480,540],['text','fixture text'],['key','Shift+Tab'],['wheel',0,600]]);
   assert.equal(host.slots[0],s);assert.equal(host.ops.size,0);
-  const inspected=await host.inspect(0);assert.equal(inspected.attempt.attemptId,s.profileIdentity);assert.equal(inspected.attempt.runId,s.profileIdentity);assert.equal(inspected.attempt.sessionId,s.epoch);
-  delete inspected.attempt.attemptId;delete inspected.attempt.runId;assert.equal(JSON.stringify(inspected).includes(s.profileIdentity),false);
+  const inspected=await host.inspect(0);assert.equal(inspected.attempt.attemptId,s.profileIdentity);assert.equal(inspected.attempt.runId,s.profileIdentity);assert.equal(inspected.attempt.sessionId,s.profileIdentity);
+  delete inspected.attempt.attemptId;delete inspected.attempt.runId;delete inspected.attempt.sessionId;assert.equal(JSON.stringify(inspected).includes(s.profileIdentity),false);
  }finally{await f.done();}
 });
 test('native controls reject replaced screens, invalid inputs, busy sessions and native restrictions',async()=>{
@@ -123,7 +123,7 @@ test('storage inspection uses the selected live page and rejects stale or closed
  const f=await fixture();try{
   const {host,s}=f;let evaluated=0;
   s.page.evaluate=async fn=>{assert.equal(fn,readVoiceStorageToken);evaluated++;return {token:'actual-storage-fixture',storageReadable:true};};
-  const r=await host.storageToken(0,s.epoch);assert.equal(r.token,'actual-storage-fixture');assert.notEqual(r.token,s.profileIdentity);assert.equal(r.slot,0);assert.equal(r.runId,s.profileIdentity);assert.equal(r.sessionId,s.epoch);assert.equal(evaluated,1);
+  const r=await host.storageToken(0,s.epoch);assert.equal(r.token,'actual-storage-fixture');assert.notEqual(r.token,s.profileIdentity);assert.equal(r.slot,0);assert.equal(r.runId,s.profileIdentity);assert.equal(r.sessionId,s.profileIdentity);assert.equal(r.browserEpoch,s.epoch);assert.equal(JSON.stringify(r).includes(s.epoch),false);assert.equal(evaluated,1);
   assert.equal(s.tokenInspection,undefined);assert.equal(host.attempts[0],null);
   await assert.rejects(host.storageToken(0,'stale'),/changed/);assert.equal(evaluated,1);
   s.page.evaluate=async()=>{host.slots[0]=null;return {token:'stale-fixture'};};
