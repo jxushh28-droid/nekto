@@ -533,6 +533,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         stopped:!!s?.stopped,
         paused:!!s?.paused,
         interactive:!!s&&!s.stopped&&!s.crashed&&!this.ops.has(i)&&!this.setup,
+        storageAvailable:!!s&&!s.stopped&&!s.crashed&&s.stage!=='reload'&&typeof s.page?.url==='function'&&s.page.url().startsWith('https://nekto-me.kz/'),
         attemptId:s?.epoch||null,
         appliedToken:tokenFingerprint(s?.profileIdentity??this.tokens?.[i]),
         stage:s?.stage||null,
@@ -726,12 +727,43 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     const s=this.slots[i];
     if(!s||s.stopped||s.crashed)return {open:false,token:null};
     if(epoch!==s.epoch)throw Error('Audio session changed. Read the current browser again.');
+    if(s.stage==='reload')throw Error('Audio page is reloading. Read storage after the document loads.');
+    // A read must remain available while authorization/Start is waiting.
+    // It never takes or releases the mutation lock owned by that operation.
+    let timer;
+    try{
+      const value=await Promise.race([s.page.evaluate(readVoiceStorageToken),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Audio browser did not respond.')),5000);})]);
+      if(this.slots[i]!==s||s.epoch!==epoch||s.stopped||s.crashed)throw Error('Audio session changed during storage inspection.');
+      return {...value,open:true,slot:i,runId:s.epoch,at:Date.now()};
+    }finally{clearTimeout(timer);}
+  }
+
+  async reloadPage(i,epoch){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed)throw Error('Audio browser is closed. Open this side without search first.');
+    if(epoch!==s.epoch)throw Error('Audio session changed. Reload the current browser again.');
     if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
     this.ops.add(i);
     try{
-      const value=await s.page.evaluate(readVoiceStorageToken);
-      if(this.slots[i]!==s||s.stopped||s.crashed)throw Error('Audio session changed during storage inspection.');
-      return {...value,open:true,slot:i,runId:s.epoch,at:Date.now()};
+      if(new URL(s.page.url()).origin!=='https://nekto-me.kz')throw Error('Audio native browser left Nekto.');
+      this.requested=false;this.enabled=false;
+      if(this.graph.process)await this.graph.routing(false);
+      this.stopCapture(i);
+      for(const r of this.clients[i]){r.write('event: closed\ndata: {}\n\n');r.end();}
+      this.clients[i].clear();this.screens[i]=null;
+      Object.assign(s,{epoch:crypto.randomUUID(),prepared:false,connected:false,paused:false,stage:'reload',status:'loading',error:'',operationError:'',failureStatus:null,authorization:null,tokenInspection:null,callToken:null,microphone:null,wire:{registrationSent:false,sentTokenMatches:null,registrationReceived:false,registrationSucceeded:null,registrationError:null,lastResult:null}});
+      this.recordAttempt(i,s);
+      await s.page.reload({waitUntil:'domcontentloaded',timeout:45000});
+      if(this.slots[i]!==s)throw Error('Audio session changed during reload.');
+      s.bootstrap=await s.page.evaluate(()=>window.__voiceTokenBootstrap||{ok:false,reason:'extension-init-not-run'});
+      s.stage='await-native-client';
+      await this.prepare(i);
+      s.stage='authorized-no-call';this.recordAttempt(i,s);
+      await this.captureScreen(i,s,true);
+      return {ok:true,operation:'authorization',results:[{slot:i,ok:true}]};
+    }catch(e){
+      if(this.slots[i]===s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}
+      throw Error(this.error(e));
     }finally{this.ops.delete(i);}
   }
 
