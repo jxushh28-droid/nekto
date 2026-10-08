@@ -24,6 +24,8 @@ The `/video` tab opens two isolated Yap.Chat sessions at https://yap.chat/video.
 
 The generated-media test uses local fixtures to verify video and audio routing without contacting other users. These fixtures do not establish that live Yap matching will succeed from every host.
 
+Yap Start waits for its native microphone/camera stream and connected socket, then clicks once. Native status comes from React's committed tree so an older render cannot trigger a false participant disconnect. A genuine disconnect closes the browser and retains a small checkpoint with the native status, live/playback match category and whether incoming live media was seen. The dashboard shows that disconnect until the next connection; the checkpoint excludes room IDs, identities, tokens and messages.
+
 ## Nekto audio calls
 
 Open `/audio` and use the existing dashboard password. Audio has its own always-visible token fields and independent saved token file. Use two distinct tokens from your own Nekto **voice** sessions: `JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken` in each regular voice browser. Paste them into this dashboard, not into chat. Applying them saves the pair privately and starts both native voice searches. Later, **Подключить A + B** reuses the saved pair. Voice uses `https://nekto-me.kz/audiochat`; text tokens are not automatically copied into voice.

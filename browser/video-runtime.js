@@ -25,14 +25,36 @@
  function setRemote(stream){if(remote===stream&&(!stream?.getAudioTracks().length||remoteSource))return;if(remoteSource){remoteSource.disconnect();remoteSource=null;}remote=stream;if(stream?.getAudioTracks().length){remoteSource=audio.createMediaStreamSource(stream);remoteSource.connect(remoteAudio);}if(stream)startRecording();else stopRecording();}
  if(NativeRTC){const WrappedRTC=class extends NativeRTC{constructor(...args){super(...args);peers.add(this);this.addEventListener('track',e=>{if(!remoteWasConnected)ended=false;if(e.streams?.[0])setRemote(e.streams[0]);else if(e.track){const stream=remote||new MediaStream();if(!stream.getTracks().includes(e.track))stream.addTrack(e.track);setRemote(stream);}});const changed=()=>{if(peerLive(this)&&!recorder)startRecording();if(['closed','failed','disconnected'].includes(this.connectionState)||['closed','failed','disconnected'].includes(this.iceConnectionState)){if(![...peers].some(peerLive)){if(remoteWasConnected)ended=true;setRemote(null);gain.gain.value=0;}}};this.addEventListener('connectionstatechange',changed);this.addEventListener('iceconnectionstatechange',changed);}};window.RTCPeerConnection=WrappedRTC;if(window.webkitRTCPeerConnection===NativeRTC)window.webkitRTCPeerConnection=WrappedRTC;}
  function draw(ctx,video){ctx.fillStyle='#000000';ctx.fillRect(0,0,width,height);if(video?.readyState>=2)ctx.drawImage(video,0,0,width,height);}
+ function yapNativeProps(){
+  const roots=new Set(),fallback=[];
+  for(const element of document.querySelectorAll('button,video')){
+   const key=Object.keys(element).find(k=>k.startsWith('__reactFiber$'));let fiber=element[key];
+   for(let depth=0;fiber&&depth<80;depth++,fiber=fiber.return){
+    if(fiber.stateNode?.current)roots.add(fiber.stateNode.current);
+    const props=fiber.memoizedProps;
+    if(typeof props?.onStart==='function'&&['idle','searching','connecting','inCall','stopped'].includes(props.status))fallback.push(props);
+   }
+  }
+  // A DOM node can retain a fiber from the previous render. Read the committed
+  // root's tree, rather than trusting that stale node's return pointers.
+  for(const root of roots){
+   const pending=[root],seen=new Set();
+   while(pending.length&&seen.size<10000){
+    const fiber=pending.pop();if(!fiber||seen.has(fiber))continue;seen.add(fiber);
+    const props=fiber.memoizedProps;
+    if(typeof props?.onStart==='function'&&['idle','searching','connecting','inCall','stopped'].includes(props.status))return props;
+    if(fiber.sibling)pending.push(fiber.sibling);if(fiber.child)pending.push(fiber.child);
+   }
+  }
+  // Rootless fixtures and older renderers remain observable. Never fall back
+  // to an uncommitted branch when a real React root is present.
+  return roots.size?null:fallback[0]||null;
+ }
  function yapClientState(){
   // Read only the native chat component's existing public state. Never copy
   // its socket, user identity, messages or authentication data into diagnostics.
-  for(const element of document.querySelectorAll('button,video')){
-   const key=Object.keys(element).find(k=>k.startsWith('__reactFiber$'));let fiber=element[key];
-   for(let depth=0;fiber&&depth<40;depth++,fiber=fiber.return){
-    const props=fiber.memoizedProps;
-    if(typeof props?.onStart!=='function'||!['idle','searching','connecting','inCall','stopped'].includes(props.status))continue;
+  const props=yapNativeProps();
+  if(props){
     // The room boundary stays inside the page. If Yap replaces a participant
     // between polls, mute immediately and let the host close this side.
     const room=props.currentMatch?.type==='user'&&typeof props.currentMatch.roomId==='string'?props.currentMatch.roomId:null;
@@ -40,7 +62,6 @@
     else if(remoteWasConnected&&['idle','searching','stopped'].includes(props.status))ended=true;
     if(ended){gain.gain.value=0;stopRecording();}
     return {found:true,status:props.status,socketConnected:props.socket?.connected===true,matchKind:props.currentMatch?.type==='user'?'live':props.currentMatch?.type==='bot'?'playback':null};
-   }
   }
   return {found:false,status:null,socketConnected:false,matchKind:null};
  }

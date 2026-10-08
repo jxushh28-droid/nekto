@@ -19,6 +19,21 @@ function fixture(state={mediaReady:true,connected:false,searching:false}){
 test('Yap starts native normal video without any imported tokens',async()=>{
  const f=fixture();try{await f.host.start(0);assert.deepEqual(f.calls,['landing','ready','start']);assert.deepEqual(f.host.sessions,[null,null]);assert.equal(f.host.status().requiresSession,false);assert.equal(f.slot.searchRequested,true);}finally{await f.host.shutdown();}
 });
+test('Yap setup timeout prevents Start and reports the native readiness phase',async()=>{
+ const f=fixture();
+ f.page.waitForFunction=async fn=>{if(fn.toString().includes('nativeClientFound'))throw Object.assign(Error('fixture timeout'),{name:'TimeoutError'});};
+ try{await assert.rejects(f.host.start(0),/camera, microphone and socket setup/);assert.deepEqual(f.calls,['landing','ready']);assert.equal(f.slot.failureStage,'wait-native-ready');}finally{await f.host.shutdown();}
+});
+test('a native search that starts during setup never receives an additional Start',async()=>{
+ const state={mediaReady:true,connected:false,searching:false},f=fixture(state);
+ f.page.waitForFunction=async fn=>{if(fn.toString().includes('nativeClientFound'))state.searching=true;};
+ try{await f.host.start(0);assert.deepEqual(f.calls,['landing','ready']);assert.equal(f.slot.status,'searching');}finally{await f.host.shutdown();}
+});
+test('Yap keeps a bounded disconnect checkpoint after the browser closes',async()=>{
+ const state={mediaReady:true,connected:false,ended:true,nativeStatus:'stopped',nativeSocketConnected:true,nativeMatchKind:'live',roomId:'private-room',messages:['private-message']},f=fixture(state);
+ f.slot.selfGender='male';f.slot.hadLiveMedia=true;
+ try{await f.host.tick();assert.equal(f.host.slots[0],null);const status=f.host.status().slots[0];assert.equal(status.status,'ended');assert.equal(status.lastAttempt.hadLiveMedia,true);assert.equal(status.lastAttempt.nativeStatus,'stopped');assert.doesNotMatch(JSON.stringify(status),/private-room|private-message/);assert.equal((await f.host.inspect()).slots[0].lastAttempt.ended,true);}finally{await f.host.shutdown();}
+});
 test('Yap verification and native errors prevent all Start clicks',async()=>{
  for(const state of [{mediaReady:true,verification:true},{mediaReady:true,login:true},{mediaReady:true,genderRequired:true},{mediaReady:true,nativeError:'Yap has restricted this session.'}]){
   const f=fixture(state);try{await assert.rejects(f.host.start(0),/^Error: Yap/);assert.deepEqual(f.calls,[]);}finally{await f.host.shutdown();}

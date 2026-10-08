@@ -11,7 +11,7 @@ export function yapPreferences(selfGender='male'){
 }
 
 export class YapVideoHost extends VideoHost{
- constructor(options){super({...options,pageUrl:target,sessionless:true});}
+ constructor(options){super({...options,pageUrl:target,sessionless:true});this.lastAttempts=[null,null];}
  frame(slot){
   if(!slot?.page)return;
   return slot.page.frames().find(f=>{try{const u=new URL(f.url());return slot.fixture?u.hostname==='127.0.0.1':u.origin==='https://yap.chat'&&u.pathname==='/video';}catch{return false;}});
@@ -19,6 +19,7 @@ export class YapVideoHost extends VideoHost{
  async open(i,{fixture=false,port=3000,selfGender='male'}={}){
   const storageState=yapPreferences(selfGender);
   if(this.slots[i])return;
+  this.lastAttempts[i]=null;
   const browser=await this.getBrowser();
   // Yap reads this normal setup preference at mount. Without it, permission
   // approval opens the gender picker and its own socket effect cannot run.
@@ -57,6 +58,7 @@ export class YapVideoHost extends VideoHost{
   await slot.page.waitForFunction(()=>!!window.__videoHost?.status().mediaReady,null,{timeout});
   const frame=this.frame(slot);if(!frame)throw Error('Yap video client is unavailable.');
   const state=await frame.evaluate(()=>window.__videoHost.status());
+  slot.lastNativeState=state;if(state.connected)slot.hadLiveMedia=true;
   return {frame,state};
  }
  async prepareSession(i){await this.open(i);await this.currentClient(this.slots[i]);}
@@ -108,6 +110,14 @@ export class YapVideoHost extends VideoHost{
    },null,{timeout:30000});
    ({state}=await this.currentClient(slot));
    this.checkNative(state);
+   stage='wait-native-ready';
+   await slot.page.waitForFunction(()=>{
+    const state=window.__videoHost?.status();
+    return !!(state?.verification||state?.login||state?.nativeError||state?.genderRequired||state?.connected||state?.searching||state?.nativeClientFound&&state?.nativeSocketConnected&&state?.nativeMediaReady);
+   },null,{timeout:30000});
+   ({state}=await this.currentClient(slot));
+   this.checkNative(state);
+   if(state.connected||state.searching){slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
    stage='click-native-start';
    await start.click({timeout:5000});
    slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';
@@ -115,12 +125,21 @@ export class YapVideoHost extends VideoHost{
    await slot.page.waitForFunction(()=>{const s=window.__videoHost?.status();return !!(s?.connected||s?.searching||s?.login||s?.verification||s?.nativeError);},null,{timeout:15000});
    ({state}=await this.currentClient(slot));this.checkNative(state);
    slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;
-  }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:stage==='confirm-native-search'?'Yap did not confirm starting the search. Disconnect this side before retrying.':'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':/sign-in/.test(slot.error)?'login':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
+  }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:stage==='confirm-native-search'?'Yap did not confirm starting the search. Disconnect this side before retrying.':stage==='wait-native-ready'?'Yap camera, microphone and socket setup did not become ready. Disconnect this side before retrying.':'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':/sign-in/.test(slot.error)?'login':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
   finally{slot.busy=false;}
  }
  async tick(){await super.tick();for(const s of this.slots)if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';}
- status(){const status=super.status();return {...status,provider:'yap',requiresSession:false,slots:status.slots.map((slot,i)=>({...slot,selfGender:this.slots[i]?.selfGender||null}))};}
- async inspect(){const result=await super.inspect();for(let i=0;i<2;i++)result.slots[i].failureStage=this.slots[i]?.failureStage||null;return result;}
+ async close(i){
+  const slot=this.slots[i];if(!slot)return;
+  if(!slot.fixture){
+   const state=slot.lastNativeState||{};
+   this.lastAttempts[i]={at:Date.now(),ended:!!state.ended,selfGender:slot.selfGender||null,nativeStatus:state.nativeStatus||null,nativeSocketConnected:!!state.nativeSocketConnected,nativeMatchKind:state.nativeMatchKind||null,hadLiveMedia:!!slot.hadLiveMedia,failureStage:slot.failureStage||null};
+   console.info(JSON.stringify({event:'yap_video_closed',slot:i?'B':'A',reason:state.ended?'participant-ended':'closed',nativeStatus:state.nativeStatus||null,matchKind:state.nativeMatchKind||null,hadLiveMedia:!!slot.hadLiveMedia}));
+  }
+  await super.close(i);
+ }
+ status(){const status=super.status();return {...status,provider:'yap',requiresSession:false,slots:status.slots.map((slot,i)=>({...slot,status:!slot.open&&this.lastAttempts[i]?.ended?'ended':slot.status,error:!slot.open&&this.lastAttempts[i]?.ended?'Yap participant disconnected or the native room changed. Connect this side again when ready.':slot.error,selfGender:this.slots[i]?.selfGender||this.lastAttempts[i]?.selfGender||null,lastAttempt:this.lastAttempts[i]}))};}
+ async inspect(){const result=await super.inspect();for(let i=0;i<2;i++){result.slots[i].failureStage=this.slots[i]?.failureStage||null;result.slots[i].lastAttempt=this.lastAttempts[i];}return result;}
  async send(i,text){
   if(typeof text!=='string'||!text.trim()||text.length>4000)throw Error('Write a message of 1–4000 characters.');
   const slot=this.slots[i];if(!slot?.connected)throw Error('Connect this participant first.');
