@@ -179,3 +179,33 @@ test('audio browser tools send normalized clicks, text and keys only for the dis
   assert.equal(submissions.length,3);
  }finally{await browser.close();}
 });
+
+test('localStorage token panel shows raw browser value, compares current input, and clears replaced sessions',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),reads=[];let epoch='storage-run-A',open=true,release=null,delay=false;
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.endsWith('/storage')){
+    reads.push({path,data:route.request().postDataJSON()});const runId=epoch;
+    if(delay)await new Promise(resolve=>release=resolve);
+    return route.fulfill({json:{open:true,slot:0,runId,at:Date.now(),token:'actual-native-token',storageReadable:true}});
+   }
+   if(path.endsWith('/screen'))return route.fulfill({status:204});
+   if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:['configured-token',null]}});
+   if(path.endsWith('/status'))return route.fulfill({json:{enabled:false,setup:false,configured:[true,false],slots:[{open,attemptId:epoch,status:'verification',busy:false},{open:false,status:'closed',busy:false}]}});
+   const file=path==='/audio'?'audio.html':path.slice(1);return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>document.querySelector('#tokenA').value==='configured-token');
+  assert.equal(await page.locator('#card1 .readStorage').isDisabled(),true);
+  await page.locator('#card0 .readStorage').click();await page.waitForFunction(()=>document.querySelector('#card0 .storageToken').value==='actual-native-token');
+  assert.equal(await page.locator('#card0 .storageToken').getAttribute('readonly'),'');assert.match(await page.locator('#card0 .storageMatch').textContent(),/НЕ совпадает/);
+  assert.deepEqual(reads,[{path:'/api/audio/0/storage',data:{epoch:'storage-run-A'}}]);
+  await page.locator('#tokenA').fill('actual-native-token');assert.match(await page.locator('#card0 .storageMatch').textContent(),/^Совпадает/);
+  assert.equal(await page.locator('#card0 .fieldToken').inputValue(),'actual-native-token');
+  delay=true;await page.locator('#card0 .readStorage').click();await page.waitForFunction(()=>document.querySelector('#card0 .readStorage').disabled);
+  epoch='replacement-run';await page.waitForTimeout(1200);release();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .readStorage').disabled);assert.equal(await page.locator('#card0 .storageToken').inputValue(),'');
+  open=false;await page.waitForFunction(()=>document.querySelector('#card0 .storageMatch').textContent.includes('Браузер закрыт'));
+  assert.equal(await page.locator('#card0 .readStorage').isDisabled(),true);
+ }finally{await browser.close();}
+});

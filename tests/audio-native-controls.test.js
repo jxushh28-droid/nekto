@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {EventEmitter} from 'node:events';
 import {runInNewContext} from 'node:vm';
 import {AudioHost} from '../audio-host.js';
-import {inspectVoiceToken} from '../voice-inspection.js';
+import {inspectVoiceToken,readVoiceStorageToken} from '../voice-inspection.js';
 
 const matchingToken={clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,authenticated:true,socketConnected:true,identityPresent:true,captcha:false,hcaptcha:false,restricted:false,registrationError:0};
 async function fixture(){
@@ -107,5 +107,27 @@ test('a registration frame carrying a different token stops the session despite 
  const f=await fixture();try{
   f.s.wire.sentTokenMatches=false;f.host.requested=true;f.host.enabled=true;
   await f.host.tick();assert.equal(f.s.stopped,true);assert.match(f.s.error,/token changed/);assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);
+ }finally{await f.done();}
+});
+
+test('explicit storage reader returns the actual stored value without writing or using configured identity',()=>{
+ let raw=JSON.stringify({user:{authToken:'actual-native-fixture'}}),reads=0;
+ const context={location:{origin:'https://nekto-me.kz'},localStorage:{getItem:key=>{assert.equal(key,'storage_audio_v2');reads++;return raw;}}};
+ const read=()=>runInNewContext('('+readVoiceStorageToken.toString()+')()',context);
+ assert.equal(read().token,'actual-native-fixture');assert.equal(reads,1);
+ raw=null;assert.equal(read().token,null);assert.equal(read().storageReadable,true);
+ raw='{broken';assert.equal(read().storageReadable,false);assert.equal(read().token,null);
+ context.location.origin='https://unrelated.test';assert.throws(read,/left Nekto/);
+});
+test('storage inspection uses the selected live page and rejects stale or closed sessions',async()=>{
+ const f=await fixture();try{
+  const {host,s}=f;let evaluated=0;
+  s.page.evaluate=async fn=>{assert.equal(fn,readVoiceStorageToken);evaluated++;return {token:'actual-storage-fixture',storageReadable:true};};
+  const r=await host.storageToken(0,s.epoch);assert.equal(r.token,'actual-storage-fixture');assert.notEqual(r.token,s.profileIdentity);assert.equal(r.slot,0);assert.equal(r.runId,s.epoch);assert.equal(evaluated,1);
+  assert.equal(s.tokenInspection,undefined);assert.equal(host.attempts[0],null);
+  await assert.rejects(host.storageToken(0,'stale'),/changed/);assert.equal(evaluated,1);
+  s.page.evaluate=async()=>{host.slots[0]=null;return {token:'stale-fixture'};};
+  await assert.rejects(host.storageToken(0,s.epoch),/changed/);assert.equal(host.ops.size,0);
+  assert.deepEqual(await host.storageToken(0,s.epoch),{open:false,token:null});
  }finally{await f.done();}
 });
