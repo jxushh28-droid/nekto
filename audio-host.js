@@ -9,7 +9,7 @@ import {primeVoiceStorage,pinVoiceToken} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
 import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
-import {inspectVoiceToken} from './voice-inspection.js';
+import {inspectVoiceToken,readVoiceStorageToken} from './voice-inspection.js';
 import {validateNativeInput} from './native-input.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
@@ -719,6 +719,19 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     }catch(e){
       if(e.code==='TOKEN_MISMATCH'&&this.slots[i]===s){s.status='error';s.error=this.error(e);await this.stopFailed(i,s);}
       throw e;
+    }finally{this.ops.delete(i);}
+  }
+
+  async storageToken(i,epoch){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed)return {open:false,token:null};
+    if(epoch!==s.epoch)throw Error('Audio session changed. Read the current browser again.');
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    this.ops.add(i);
+    try{
+      const value=await s.page.evaluate(readVoiceStorageToken);
+      if(this.slots[i]!==s||s.stopped||s.crashed)throw Error('Audio session changed during storage inspection.');
+      return {...value,open:true,slot:i,runId:s.epoch,at:Date.now()};
     }finally{this.ops.delete(i);}
   }
 

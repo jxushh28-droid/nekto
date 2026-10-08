@@ -95,7 +95,7 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
   if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
-   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect)$/);if(control)return json(res,200,control[2]==='input'?await audio.input(Number(control[1]),b):await audio.inspect(Number(control[1])));
+   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|storage)$/);if(control){const i=Number(control[1]);return json(res,200,control[2]==='input'?await audio.input(i,b):control[2]==='storage'?await audio.storageToken(i,b.epoch):await audio.inspect(i));}
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
    const single=url.pathname.match(/^\/api\/audio\/([01])\/token$/);if(single)return json(res,200,await audio.applySingle(Number(single[1]),b.token));
    const check=url.pathname.match(/^\/api\/audio\/([01])\/check$/);if(check)return json(res,200,await audio.applySingle(Number(check[1]),b.token,{startCall:false}));

@@ -37,3 +37,20 @@ test('real Chromium input reaches the native field and completes a check in the 
   assert.equal(await page.locator('#nativeField').inputValue(),'fixture answer');
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
 });
+
+test('storage inspection reads different actual values from isolated Chromium sides',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'storage-browser-')),browser=await chromium.launch({headless:true});
+ const host=new AudioHost({data:dir,graph:{process:false,close:async()=>{}}});clearInterval(host.timer);await host.loaded;
+ try{
+  for(let i=0;i<2;i++){
+   const context=await browser.newContext();await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><body>Storage fixture</body>'}));
+   const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
+   await page.evaluate(token=>localStorage.setItem('storage_audio_v2',JSON.stringify({user:{authToken:token}})),'actual-browser-'+i);
+   host.slots[i]={browser:{close:async()=>{}},context,page,epoch:'run-'+i,profileIdentity:'different-configured-'+i};
+  }
+  for(let i=0;i<2;i++){
+   const result=await host.storageToken(i,'run-'+i);assert.equal(result.token,'actual-browser-'+i);assert.equal(result.runId,'run-'+i);
+   assert.equal(await host.slots[i].page.evaluate(()=>JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken),result.token);
+  }
+ }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
+});
