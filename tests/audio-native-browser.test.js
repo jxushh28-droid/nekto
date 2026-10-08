@@ -51,6 +51,13 @@ test('storage inspection reads different actual values from isolated Chromium si
   for(let i=0;i<2;i++){
    const result=await host.storageToken(i,'run-'+i);assert.equal(result.token,'actual-browser-'+i);assert.equal(result.runId,'different-configured-'+i);assert.equal(result.sessionId,'different-configured-'+i);assert.equal(result.browserEpoch,'run-'+i);assert.equal(JSON.stringify(result).includes('run-'+i),false);
    assert.equal(await host.slots[i].page.evaluate(()=>JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken),result.token);
+   const evaluated=await host.console(i,{epoch:'run-'+i,code:"localStorage.setItem('console-fixture','side-"+i+"'); console.log('native-side-"+i+"'); JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken"});
+   assert.equal(evaluated.ok,true);assert.equal(evaluated.value,'actual-browser-'+i);assert.equal(evaluated.pageURL,'https://nekto-me.kz/audiochat');assert.equal(evaluated.browserEpoch,'run-'+i);
+   assert.ok(evaluated.logs.some(x=>x.text==='native-side-'+i));assert.equal(await host.slots[i].page.evaluate(()=>localStorage.getItem('console-fixture')),'side-'+i);
+   const asyncResult=await host.console(i,{epoch:'run-'+i,code:'(async()=>({origin:location.origin,token:JSON.parse(localStorage.getItem("storage_audio_v2")).user.authToken}))()'});
+   assert.equal(JSON.parse(asyncResult.value).token,'actual-browser-'+i);
+   const syntax=await host.console(i,{epoch:'run-'+i,code:'const = invalid'});assert.equal(syntax.ok,false);assert.match(syntax.error,/SyntaxError|Unexpected/);assert.equal(host.ops.size,0);
+
   }
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
 });
