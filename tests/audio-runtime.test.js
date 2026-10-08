@@ -16,9 +16,9 @@ test('ordinary native prompts require attention instead of being labeled bans or
  const f=fixture({elements:{'.swal2-popup':shown('Укажите ваш возраст.')}});f.state.system.isAuth=true;f.state.chat.activeConnectionId='stale-call';
  const status=f.client.status();assert.equal(status.status,'attention');assert.equal(status.connected,false);assert.match(status.detail,/Укажите ваш возраст/);assert.deepEqual(f.counts(),{requests:0,writes:0});
 });
-test('native ban popup remains blocked and CAPTCHA keeps precedence over a prompt',()=>{
+test('visible native ban remains blocked when a CAPTCHA flag is also set',()=>{
  const popup=shown('БАН'),f=fixture({elements:{'.swal2-popup':popup,'.swal2-popup.banPopup':popup}});
- assert.equal(f.client.status().status,'blocked');f.state.system.captchaRequired=true;assert.equal(f.client.status().status,'verification');
+ assert.equal(f.client.status().status,'blocked');f.state.system.captchaRequired=true;const state=f.client.status();assert.equal(state.status,'blocked');assert.equal(state.restrictionSource,'.swal2-popup.banPopup');assert.equal(state.detail,'БАН');
 });
 test('hidden native popups do not stop a call',()=>{
  const f=fixture({elements:{'.swal2-popup':{isConnected:true,checkVisibility:()=>false}}});f.state.system.isAuth=true;f.state.chat.activeConnectionId='fixture-call';assert.equal(f.client.status().status,'connected');

@@ -9,6 +9,8 @@ import {primeVoiceStorage} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
 import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
+import {inspectVoiceToken} from './voice-inspection.js';
+import {validateNativeInput} from './native-input.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat';
@@ -271,8 +273,26 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     }finally{clearTimeout(timer);}
   }
 
+  async inspectToken(i,s,phase){
+    if(!s.profileIdentity)return null;
+    const snapshot=await s.page.evaluate(inspectVoiceToken,s.profileIdentity);
+    if(this.slots[i]!==s)throw Error('Audio session changed during token inspection.');
+    s.tokenInspection={phase,at:Date.now(),...snapshot};
+    if(phase==='before-start'||phase==='after-start'){
+      s.callToken=s.callToken||{};
+      s.callToken[phase==='before-start'?'before':'after']={...s.tokenInspection};
+    }
+    this.recordAttempt(i,s);
+    return snapshot;
+  }
+
+  assertToken(snapshot,s){
+    if(s?.wire?.sentTokenMatches===false||snapshot&&(!snapshot.clientFound||!snapshot.storageReadable||!snapshot.savedTokenMatches||!snapshot.liveTokenMatches))throw Object.assign(Error('Nekto voice token changed in the active session. The bridge is disabled. Disconnect this side before applying your saved token again.'),{code:'TOKEN_MISMATCH'});
+  }
+
   async start(i){
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
+    if(this.slots[i]?.paused)throw Error('Audio session is paused. Complete the check using its native screen before starting a call.');
     this.ops.add(i);
     this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare',startedAt:Date.now()};
     if(this.slots[i])this.slots[i].operationError='';
@@ -292,6 +312,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           this.recordNativeState(s,state);
         }
         if(s.stage==='wait-search'&&!s.microphone)await this.inspectMicrophone(i,s,'after-start');
+        if(s.stage==='wait-search')this.assertToken(await this.inspectToken(i,s,'after-start'),s);
         if(['verification','blocked','attention'].includes(state?.status)){s.failureStatus=state.status;throw Error(state.detail?'Nekto: '+state.detail:'Nekto requires attention before starting this voice session.');}
         if(state?.connected||state?.status==='searching'){
           Object.assign(s,{connected:state.connected,status:state.status,error:''});
@@ -301,6 +322,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         if(!clicked&&state?.authenticated&&state?.socketConnected&&await s.page.locator('#searchCompanyBtn').isVisible()){
           const cookies=s.page.locator('#acceptCookies');
           if(await cookies.isVisible()&&await cookies.isEnabled())await cookies.click({timeout:800}).catch(()=>{});
+          this.assertToken(await this.inspectToken(i,s,'before-start'),s);
           s.stage='start-click';
           console.log(JSON.stringify({event:'audio_search_start',slot:i?'B':'A',attemptId:s.epoch,phase:'before-click',authenticated:state.authenticated,socketConnected:state.socketConnected,registrationError:state.registrationError||0}));
           await s.page.locator('#searchCompanyBtn').click({timeout:5000});
@@ -388,7 +410,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
   }
 
   async persistProfile(i,s){
@@ -420,6 +442,19 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           if(!state||this.slots[i]!==s||this.ops.has(i))continue;
           this.recordDiagnostics(i,s,state.diagnostics);
           this.recordNativeState(s,state);
+          const token=await this.inspectToken(i,s,'current');
+          if(this.slots[i]!==s||this.ops.has(i)||this.setup)continue;
+          this.assertToken(token,s);
+          if(token?.restricted){state.status='blocked';state.connected=false;}
+          if(s.paused&&!['verification','attention','blocked'].includes(state.status)){
+            // Recovery follows the native client; never click Start or reauthorize.
+            if(token&&(!token.authenticated||!token.socketConnected||!token.identityPresent||!s.wire?.sentTokenMatches||!s.wire?.registrationSucceeded))continue;
+            s.paused=false;s.operationError='';s.failureStatus=null;
+            if(token)s.prepared=true;
+            s.stage='native-check-completed';
+            await this.persistProfile(i,s);
+            if(this.slots[i]!==s||this.ops.has(i)||this.setup)continue;
+          }
           if(state.ended){await this.close(i);continue;}
           if(s.operationError&&!state.connected&&!['verification','blocked','attention'].includes(state.status)){
             state.status='error';
@@ -434,17 +469,18 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
           s.status='error';
           s.connected=false;
           s.error=this.error(e);
+          await this.stopFailed(i,s);
         }
       }
 
       for(let i=0;i<2;i++){
         const s=this.slots[i];
         if(!s)continue;
-        if(s.connected||this.clients[i].size)this.ensureCapture(i);
+        if(!s.paused&&!s.stopped&&(s.connected||this.clients[i].size))this.ensureCapture(i);
         else this.stopCapture(i);
       }
 
-      const enabled=!!this.graph.process&&this.requested&&this.slots.every(s=>s?.connected&&!s.crashed);
+      const enabled=!!this.graph.process&&this.requested&&this.slots.every(s=>s?.connected&&!s.crashed&&!s.paused&&!s.stopped);
       if(this.graph.process)await this.graph.routing(enabled);
       this.enabled=enabled;
     }catch{
@@ -476,6 +512,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         open:!!s&&!s.stopped,
         closable:!!s,
         stopped:!!s?.stopped,
+        paused:!!s?.paused,
+        interactive:!!s&&!s.stopped&&!s.crashed&&!this.ops.has(i)&&!this.setup,
         attemptId:s?.epoch||null,
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
@@ -485,6 +523,8 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         busy:this.setup||this.ops.has(i),
         error:s?.error||s?.captureError||'',
         authorization:s?.authorization||null,
+        tokenInspection:s?.tokenInspection||null,
+        callToken:s?.callToken||null,
         wire:s?.wire?{...s.wire}:null,
         profile:s?.profile?{...s.profile}:null,
         diagnostics:s?.diagnostics||[],
@@ -499,7 +539,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
 
   ensureCapture(i){
     const original=this.slots[i];
-    if(!original||original.crashed||original.stopped||original.captureFailed||this.captures[i])return;
+    if(!original||original.crashed||original.stopped||original.paused||original.captureFailed||this.captures[i])return;
     const child=this.captures[i]=this.graph.capture(i);
     let carry=Buffer.alloc(0);
 
@@ -598,6 +638,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
 
   async stopFailed(i,s){
     if(this.slots[i]!==s||s.stopped)return;
+    if(['verification','attention'].includes(s.status))return this.pauseForInput(i,s);
     s.stopped=true;s.connected=false;this.requested=false;this.enabled=false;
     this.recordAttempt(i,s);
     this.stopCapture(i);
@@ -609,6 +650,65 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     await this.captureScreen(i,s,true);
     await this.persistProfile(i,s);
     await s.browser.close().catch(()=>{});
+  }
+
+  async pauseForInput(i,s){
+    if(this.slots[i]!==s||s.stopped)return;
+    const alreadyPaused=s.paused;
+    s.paused=true;s.connected=false;this.requested=false;this.enabled=false;
+    this.stopCapture(i);
+    for(const r of this.clients[i]){r.write('event: closed\ndata: {}\n\n');r.end();}
+    this.clients[i].clear();
+    if(this.graph.process)await this.graph.routing(false).catch(()=>{});
+    this.recordAttempt(i,s);
+    if(!alreadyPaused){
+      console.warn(JSON.stringify({event:'audio_session_paused',slot:i?'B':'A',attemptId:s.epoch,stage:s.stage,status:s.status}));
+      await this.captureScreen(i,s);
+      await this.persistProfile(i,s);
+    }
+  }
+
+  async input(i,input){
+    const action=validateNativeInput(input),s=this.slots[i];
+    if(!s||s.stopped||s.crashed)throw Error('Audio native browser is closed.');
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    if(input.epoch!==s.epoch)throw Error('Audio screen changed. Refresh it before interacting.');
+    this.ops.add(i);
+    try{
+      if(new URL(s.page.url()).origin!=='https://nekto-me.kz')throw Error('Audio native browser left Nekto. Close this side.');
+      const state=await this.state(s);
+      const token=await this.inspectToken(i,s,'before-input');
+      this.assertToken(token,s);
+      if(state?.status==='blocked'||token?.restricted){
+        s.status='blocked';s.error=state?.detail||'Nekto has blocked this session.';
+        await this.stopFailed(i,s);
+        throw Error('Nekto has blocked this session. Screen controls cannot remove that restriction.');
+      }
+      if(['verification','attention'].includes(state?.status)){s.status=state.status;s.error=state.detail||'';await this.pauseForInput(i,s);}
+      if(this.slots[i]!==s)throw Error('Audio screen changed. Refresh it before interacting.');
+      if(action.action==='click'){
+        const viewport=s.page.viewportSize();
+        if(!viewport)throw Error('Audio screen size is unavailable.');
+        await s.page.mouse.click(Math.min(viewport.width-1,action.x*viewport.width),Math.min(viewport.height-1,action.y*viewport.height));
+      }else if(action.action==='text')await s.page.keyboard.insertText(action.text);
+      else if(action.action==='key')await s.page.keyboard.press(action.key);
+      else await s.page.mouse.wheel(0,action.deltaY);
+      this.screens[i]=null;
+      await this.captureScreen(i,s,true);
+      return {ok:true};
+    }catch(e){
+      if(e.code==='TOKEN_MISMATCH'&&this.slots[i]===s){s.status='error';s.error=this.error(e);await this.stopFailed(i,s);}
+      throw e;
+    }finally{this.ops.delete(i);}
+  }
+
+  async inspect(i){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed)return {open:false,attempt:this.attempts[i]};
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    this.ops.add(i);
+    try{await this.inspectToken(i,s,'inspect');return {open:true,attempt:this.attempts[i]};}
+    finally{this.ops.delete(i);}
   }
 
   async close(i){
