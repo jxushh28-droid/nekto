@@ -17,7 +17,7 @@ test('authenticated attempt diagnostics show the applied token while internal ID
   s.profileIdentity=token;s.stage='wait-search';s.status='verification';s.paused=true;
   s.page.evaluate=async()=>({clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,captcha:true});
   const inspected=(await f.host.inspect(0)).attempt;
-  assert.equal(inspected.attemptId,token);assert.equal(inspected.runId,s.epoch);
+  assert.equal(inspected.attemptId,token);assert.equal(inspected.runId,token);assert.equal(inspected.sessionId,s.epoch);
   assert.equal(inspected.status,'verification');assert.equal(inspected.tokenInspection.captcha,true);
   assert.equal(f.host.attempts[0].attemptId,s.epoch);
   assert.equal(JSON.stringify(f.host.attempts[0]).includes(token),false);
@@ -27,7 +27,7 @@ test('authenticated attempt diagnostics show the applied token while internal ID
   f.host.tokens[0]='replacement-fixture-token';await f.host.close(0);
   const closed=await f.host.inspect(0);
   assert.equal(closed.open,false);assert.equal(closed.attempt.attemptId,token);
-  assert.equal(closed.attempt.runId,s.epoch);
+  assert.equal(closed.attempt.runId,token);assert.equal(closed.attempt.sessionId,s.epoch);
  }finally{await f.done();}
 });
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
@@ -178,8 +178,8 @@ test('audio reconnect restores the native profile and confirms the sent token fo
   await f.host.prepare(0);const status=f.host.status().slots[0];
   assert.equal(contexts.length,2);assert.equal(JSON.parse(contexts[1].origins[0].localStorage[0].value).user.volume,37);assert.equal(contexts[1].cookies[0].value,'private-cookie');
   assert.equal(status.profile.restored,true);assert.equal(status.wire.sentTokenMatches,true);assert.equal(status.wire.registrationSucceeded,true);
-  assert.equal(status.lastAttempt.attemptId,'profile-fixture-token');
-  const redacted=structuredClone(status);delete redacted.lastAttempt.attemptId;
+  assert.equal(status.lastAttempt.attemptId,'profile-fixture-token');assert.equal(status.lastAttempt.runId,'profile-fixture-token');assert.equal(status.lastAttempt.sessionId,status.attemptId);
+  const redacted=structuredClone(status);delete redacted.lastAttempt.attemptId;delete redacted.lastAttempt.runId;
   assert.doesNotMatch(JSON.stringify(redacted),/private-cookie|profile-fixture-token/);
  }finally{await f.done();}
 });

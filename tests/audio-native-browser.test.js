@@ -49,7 +49,7 @@ test('storage inspection reads different actual values from isolated Chromium si
    host.slots[i]={browser:{close:async()=>{}},context,page,epoch:'run-'+i,profileIdentity:'different-configured-'+i};
   }
   for(let i=0;i<2;i++){
-   const result=await host.storageToken(i,'run-'+i);assert.equal(result.token,'actual-browser-'+i);assert.equal(result.runId,'run-'+i);
+   const result=await host.storageToken(i,'run-'+i);assert.equal(result.token,'actual-browser-'+i);assert.equal(result.runId,'different-configured-'+i);assert.equal(result.sessionId,'run-'+i);
    assert.equal(await host.slots[i].page.evaluate(()=>JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken),result.token);
   }
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
