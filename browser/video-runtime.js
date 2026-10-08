@@ -59,7 +59,7 @@
     // between polls, mute immediately and let the host close this side.
     const room=props.currentMatch?.type==='user'&&typeof props.currentMatch.roomId==='string'?props.currentMatch.roomId:null;
     if(room){if(!remoteWasConnected||!yapMatchRoom)yapMatchRoom=room;else if(room!==yapMatchRoom)ended=true;}
-    else if(remoteWasConnected&&['idle','searching','stopped'].includes(props.status))ended=true;
+    else if(remoteWasConnected&&(props.currentMatch?.type==='bot'||['idle','searching','stopped'].includes(props.status)))ended=true;
     if(ended){gain.gain.value=0;stopRecording();}
     const mode=props.socket?.auth?.mode;
     return {found:true,status:props.status,socketConnected:props.socket?.connected===true,matchKind:props.currentMatch?.type==='user'?'live':props.currentMatch?.type==='bot'?'playback':null,mode:['normal','test','bot-only','adult'].includes(mode)?mode:null};
@@ -79,14 +79,15 @@
     const cameraError=texts.some(t=>/^(?:camera access denied|microphone access denied|unable to access (?:camera|microphone)|permission denied|camera(?:\/| and )microphone permissions are required|camera and microphone are blocked|your camera isn't working)/i.test(t));
     const login=texts.some(t=>/^(?:login required|sign in first|please (?:log ?in|sign in) (?:with Google )?to start|you (?:need|must) (?:log ?in|sign in) (?:first|to start))/i.test(t));
     const mode=native.mode||({matches:'bot-only',user:'test',test:'test'}[new URL(location.href).searchParams.get('mode')]||'normal');
-    const nativeError=restricted?'Yap has restricted this session.':cameraError?'Yap could not access the hosted camera or microphone.':mode==='bot-only'?'Yap selected playback-only matching for this browser. A live participant is required for the bridge.':native.matchKind==='playback'?'Yap matched video playback instead of a live participant. Disconnect this side before starting another search.':'';
+    const playbackWaiting=native.matchKind==='playback'&&mode!=='bot-only';
+    const nativeError=restricted?'Yap has restricted this session.':cameraError?'Yap could not access the hosted camera or microphone.':mode==='bot-only'?'Yap selected playback-only matching for this browser. A live participant is required for the bridge.':'';
     const message=[...document.querySelectorAll('textarea,input[type="text"]')].some(e=>!e.disabled&&visible(e));
     let selfGender=null;try{const value=localStorage.getItem('uhmingle_selected_gender');if(value==='male'||value==='female')selfGender=value;}catch{}
     const genderRequired=!selfGender&&texts.some(t=>/^(?:Who are you\?|Pick your gender to start matching\.)$/i.test(t));
     const local=[...document.querySelectorAll('video')].find(v=>v!==incoming&&v!==siteRemoteVideo()&&v.srcObject?.getTracks?.().length);
     const localVideo={ready:local?.readyState||0,paused:local?.paused??true,tracks:local?.srcObject?.getTracks?.().map(t=>({kind:t.kind,state:t.readyState}))||[]};
     const nativeMediaReady=['audio','video'].every(kind=>localVideo.tracks.some(t=>t.kind===kind&&t.state==='live'));
-    return {connected:connected(),ended,searching:['searching','connecting'].includes(native.status)||texts.some(t=>/^(?:searching|finding someone|looking for)(?:\b|…|\.\.\.)/i.test(t))||peers.size>0&&texts.some(t=>/^connecting(?:\b|…|\.\.\.)/i.test(t)),nativeError,login,verification,mediaReady:!disposed,nativeMediaReady,localVideo,selfGender,genderRequired,nativeClientFound:native.found,nativeStatus:native.status,nativeSocketConnected:native.socketConnected,nativeMatchKind:native.matchKind,nativeMode:mode,cameraCalls,canSend:message,audioState:audio.state,receiverFailed:player.failed,bridgeEnabled:enabled&&otherConnected,peerStates:[...peers].map(p=>({connection:p.connectionState,ice:p.iceConnectionState})),remoteTracks:remote?.getTracks().map(t=>({kind:t.kind,state:t.readyState}))||[]};
+    return {connected:connected(),ended,searching:['searching','connecting'].includes(native.status)||texts.some(t=>/^(?:searching|finding someone|looking for)(?:\b|…|\.\.\.)/i.test(t))||peers.size>0&&texts.some(t=>/^connecting(?:\b|…|\.\.\.)/i.test(t)),playbackWaiting,nativeError,login,verification,mediaReady:!disposed,nativeMediaReady,localVideo,selfGender,genderRequired,nativeClientFound:native.found,nativeStatus:native.status,nativeSocketConnected:native.socketConnected,nativeMatchKind:native.matchKind,nativeMode:mode,cameraCalls,canSend:message,audioState:audio.state,receiverFailed:player.failed,bridgeEnabled:enabled&&otherConnected,peerStates:[...peers].map(p=>({connection:p.connectionState,ice:p.iceConnectionState})),remoteTracks:remote?.getTracks().map(t=>({kind:t.kind,state:t.readyState}))||[]};
    }
    const labels=[...document.querySelectorAll('[data-tr]')].filter(visible),texts=labels.map(el=>(el.innerText||'').replace(/\s+/g,' ').trim());
    const restricted=labels.some(el=>el.dataset.tr==='youre-banned')||texts.some(text=>/^(?:you (?:are|have been) banned|your (?:account|access|session|ip(?: address)?) (?:is|has been) (?:banned|blocked|restricted)|access (?:is |has been )?denied|ban expires(?: in|:))/i.test(text));

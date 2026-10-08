@@ -94,7 +94,7 @@ test('Yap diagnoses native React session status without exposing socket or ident
   await page.evaluate(()=>{document.getElementById('native').__reactFiber$fixture={return:{memoizedProps:{onStart(){},status:'searching',socket:{connected:true,auth:{token:'private-fixture-value'}},selfInfo:{userId:'private-fixture-value'},currentMatch:null}}};});
   let state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeClientFound,true);assert.equal(state.nativeSocketConnected,true);assert.equal(state.searching,true);assert.equal(state.nativeStatus,'searching');assert.doesNotMatch(JSON.stringify(state),/private-fixture-value/);
   await page.evaluate(()=>{const props=document.getElementById('native').__reactFiber$fixture.return.memoizedProps;props.status='inCall';props.currentMatch={type:'bot',videoUrl:'private-fixture-value'};});
-  state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeMatchKind,'playback');assert.equal(state.connected,false);assert.match(state.nativeError,/playback instead of a live participant/);assert.doesNotMatch(JSON.stringify(state),/private-fixture-value/);
+  state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.nativeMatchKind,'playback');assert.equal(state.connected,false);assert.equal(state.nativeError,'');assert.equal(state.playbackWaiting,true);assert.doesNotMatch(JSON.stringify(state),/private-fixture-value/);
  }finally{await context.close();await browser.close();}
 });
 test('Yap ignores stale React renders and closes only after a committed participant change',async()=>{

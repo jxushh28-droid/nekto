@@ -90,7 +90,7 @@ export class YapVideoHost extends VideoHost{
   try{
    let {state}=await this.currentClient(slot);
    this.checkNative(state);
-   if(state.connected||state.searching){slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
+   if(state.connected||state.searching||state.playbackWaiting){slot.connected=!!state.connected;slot.status=state.connected?'connected':state.playbackWaiting?'playback':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
    stage='wait-entry';
    // The media adapter can be ready before React mounts/hydrates Yap's UI.
    // Wait for a native handler, then click the entry only once.
@@ -127,23 +127,23 @@ export class YapVideoHost extends VideoHost{
    stage='wait-native-ready';
    await slot.page.waitForFunction(()=>{
     const state=window.__videoHost?.status();
-    return !!(state?.verification||state?.login||state?.nativeError||state?.genderRequired||state?.connected||state?.searching||state?.nativeClientFound&&state?.nativeSocketConnected&&state?.nativeMediaReady);
+    return !!(state?.verification||state?.login||state?.nativeError||state?.genderRequired||state?.connected||state?.searching||state?.playbackWaiting||state?.nativeClientFound&&state?.nativeSocketConnected&&state?.nativeMediaReady);
    },null,{timeout:30000});
    ({state}=await this.currentClient(slot));
    this.checkNative(state);
-   if(state.connected||state.searching){slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
+   if(state.connected||state.searching||state.playbackWaiting){slot.connected=!!state.connected;slot.status=state.connected?'connected':state.playbackWaiting?'playback':'searching';slot.searchRequested=!state.connected;slot.searchAt||=Date.now();return;}
    await this.persistProfile(i,slot);
    stage='click-native-start';
    await start.click({timeout:5000});
    slot.searchRequested=true;slot.searchAt=Date.now();slot.status='starting';slot.error='';
    stage='confirm-native-search';
-   await slot.page.waitForFunction(()=>{const s=window.__videoHost?.status();return !!(s?.connected||s?.searching||s?.login||s?.verification||s?.nativeError);},null,{timeout:15000});
+   await slot.page.waitForFunction(()=>{const s=window.__videoHost?.status();return !!(s?.connected||s?.searching||s?.playbackWaiting||s?.login||s?.verification||s?.nativeError);},null,{timeout:15000});
    ({state}=await this.currentClient(slot));this.checkNative(state);
-   slot.connected=!!state.connected;slot.status=state.connected?'connected':'searching';slot.searchRequested=!state.connected;
+   slot.connected=!!state.connected;slot.status=state.connected?'connected':state.playbackWaiting?'playback':'searching';slot.searchRequested=!state.connected;
   }catch(e){slot.startFailed=true;slot.failureStage=stage;slot.error=/^(Yap|Could not open)/.test(e.message)?e.message:stage==='confirm-native-search'?'Yap did not confirm starting the search. Disconnect this side before retrying.':stage==='wait-native-ready'?'Yap camera, microphone and socket setup did not become ready. Disconnect this side before retrying.':'Yap video could not start at '+stage+'.';slot.status=/verification/.test(slot.error)?'verification':/sign-in/.test(slot.error)?'login':'error';console.warn(JSON.stringify({event:'yap_video_start_failed',slot:i?'B':'A',stage,reason:e?.name==='TimeoutError'?'timeout':'client-error'}));throw Error(slot.error);}
   finally{slot.busy=false;}
  }
- async tick(){await super.tick();for(const s of this.slots)if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';}
+ async tick(){await super.tick();for(const s of this.slots){if(s?.status==='waiting')s.error='Yap has not connected a participant yet.';else if(s?.status==='playback')s.error='';}}
  async close(i){
   const slot=this.slots[i];if(!slot)return;
   if(!slot.fixture){

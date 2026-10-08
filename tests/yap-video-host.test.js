@@ -19,7 +19,7 @@ function fixture(state={mediaReady:true,connected:false,searching:false}){
  const landing={isVisible:async()=>true,click:async()=>calls.push('landing')};
  const page={url:()=> 'https://yap.chat/video',frames:()=>[page],waitForFunction:async()=>{},evaluate:async()=>state,getByRole:(role,{name})=>{assert.equal(role,'button');return name.source.includes('Random')?landing:control;}};
  const slot={page,context:{close:async()=>calls.push('close')},cache:[],cacheBytes:0,connected:false};host.slots[0]=slot;
- return {host,page,calls,slot};
+ return {host,page,calls,slot,control};
 }
 test('Yap starts native normal video without any imported tokens',async()=>{
  const f=fixture();try{await f.host.start(0);assert.deepEqual(f.calls,['landing','ready','start']);assert.deepEqual(f.host.sessions,[null,null]);assert.equal(f.host.status().requiresSession,false);assert.equal(f.slot.searchRequested,true);}finally{await f.host.shutdown();}
@@ -49,6 +49,19 @@ test('changing Yap gender requires closing the existing session first',async()=>
 });
 test('already searching or connected Yap never receives another Start',async()=>{
  for(const state of [{mediaReady:true,searching:true},{mediaReady:true,connected:true}]){const f=fixture(state);try{await f.host.start(0);assert.deepEqual(f.calls,[]);}finally{await f.host.shutdown();}}
+});
+test('normal Yap playback waits without failing or clicking Start again, then accepts a live participant',async()=>{
+ const state={mediaReady:true,connected:false,searching:false,playbackWaiting:true,nativeMatchKind:'playback',nativeMode:'normal'},f=fixture(state);
+ try{
+  await f.host.start(0);assert.equal(f.slot.status,'playback');assert.equal(f.slot.searchRequested,true);assert.equal(f.slot.connected,false);assert.deepEqual(f.calls,[]);
+  await f.host.tick();assert.equal(f.slot.status,'playback');assert.equal(f.slot.error,'');assert.equal(f.slot.startFailed,false);
+  Object.assign(state,{connected:true,playbackWaiting:false,nativeMatchKind:'live'});await f.host.tick();assert.equal(f.slot.status,'connected');assert.equal(f.slot.error,'');assert.equal(f.slot.connected,true);assert.deepEqual(f.calls,[]);
+ }finally{await f.host.shutdown();}
+});
+test('a playback response after the one native Start confirms waiting instead of failing startup',async()=>{
+ const state={mediaReady:true,connected:false,searching:false},f=fixture(state);
+ f.control.click=async()=>{f.calls.push('start');state.playbackWaiting=true;};
+ try{await f.host.start(0);assert.deepEqual(f.calls,['landing','ready','start']);assert.equal(f.slot.status,'playback');assert.equal(f.slot.startFailed,false);assert.equal(f.slot.error,'');}finally{await f.host.shutdown();}
 });
 test('Yap accepts only its main video client frame, never OmeTV',async()=>{
  const f=fixture();try{f.page.frames=()=>[{url:()=> 'https://ometv.chat/embed/index.html'},{url:()=> 'https://yap.chat/other'},f.page];assert.equal(f.host.frame(f.slot),f.page);}finally{await f.host.shutdown();}
