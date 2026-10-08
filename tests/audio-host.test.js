@@ -11,6 +11,25 @@ test('authorized native client is ready without the optional isFirstLoaded flag'
  state.system.isAuth=false;assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),false);
 });
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
+test('authenticated attempt diagnostics show the applied token while internal IDs stay opaque',async()=>{
+ const f=await fixture();try{
+  const s=f.host.slots[0],token='attempt-diagnostic-fixture-token';
+  s.profileIdentity=token;s.stage='wait-search';s.status='verification';s.paused=true;
+  s.page.evaluate=async()=>({clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,captcha:true});
+  const inspected=(await f.host.inspect(0)).attempt;
+  assert.equal(inspected.attemptId,token);assert.equal(inspected.runId,s.epoch);
+  assert.equal(inspected.status,'verification');assert.equal(inspected.tokenInspection.captcha,true);
+  assert.equal(f.host.attempts[0].attemptId,s.epoch);
+  assert.equal(JSON.stringify(f.host.attempts[0]).includes(token),false);
+  assert.equal(f.host.status().slots[0].attemptId,s.epoch);
+  assert.equal(f.host.status().slots[0].lastAttempt.attemptId,token);
+  // A later configuration or a closed browser must not relabel the previous run.
+  f.host.tokens[0]='replacement-fixture-token';await f.host.close(0);
+  const closed=await f.host.inspect(0);
+  assert.equal(closed.open,false);assert.equal(closed.attempt.attemptId,token);
+  assert.equal(closed.attempt.runId,s.epoch);
+ }finally{await f.done();}
+});
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
  const f=await fixture();try{
   f.host.tokens=['diagnostic-fixture-token',null];let calls=0;
@@ -158,7 +177,10 @@ test('audio reconnect restores the native profile and confirms the sent token fo
   await f.host.prepare(0);assert.equal(f.host.slots[0].profile.restored,false);await f.host.close(0);
   await f.host.prepare(0);const status=f.host.status().slots[0];
   assert.equal(contexts.length,2);assert.equal(JSON.parse(contexts[1].origins[0].localStorage[0].value).user.volume,37);assert.equal(contexts[1].cookies[0].value,'private-cookie');
-  assert.equal(status.profile.restored,true);assert.equal(status.wire.sentTokenMatches,true);assert.equal(status.wire.registrationSucceeded,true);assert.doesNotMatch(JSON.stringify(status),/private-cookie|profile-fixture-token/);
+  assert.equal(status.profile.restored,true);assert.equal(status.wire.sentTokenMatches,true);assert.equal(status.wire.registrationSucceeded,true);
+  assert.equal(status.lastAttempt.attemptId,'profile-fixture-token');
+  const redacted=structuredClone(status);delete redacted.lastAttempt.attemptId;
+  assert.doesNotMatch(JSON.stringify(redacted),/private-cookie|profile-fixture-token/);
  }finally{await f.done();}
 });
 test('local token matches cannot authorize Start when the wire registration used a different token',async()=>{

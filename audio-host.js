@@ -29,8 +29,8 @@ function redactWsText(value) {
 }
 
 // A non-reversible preview of a saved token: first 8 and last 5 characters,
-// so the operator can confirm which token is loaded without the panel ever
-// printing the full secret. Returns null when no token is set.
+// for compact status summaries. Authenticated attempt diagnostics can show
+// the full applied token separately. Returns null when no token is set.
 function tokenFingerprint(token){
   if(typeof token!=='string'||!token)return null;
   return token.length<=14?token.slice(0,3)+'…':token.slice(0,8)+'…'+token.slice(-5);
@@ -51,6 +51,7 @@ export class AudioHost{
     this.polling=false;
     this.ops=new Set();
     this.attempts=[null,null];
+    this.attemptTokens=new WeakMap();
     this.screens=[null,null];
     this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
     this.timer=setInterval(()=>void this.tick(),500);
@@ -303,6 +304,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
     if(this.slots[i]?.paused)throw Error('Audio session is paused. Complete the check using its native screen before starting a call.');
     this.ops.add(i);
     this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare',startedAt:Date.now()};
+    this.attemptTokens.set(this.attempts[i],this.tokens?.[i]);
     if(this.slots[i])this.slots[i].operationError='';
     try{
       const s=await this.prepare(i);
@@ -400,6 +402,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   async checkAuthorization(i){
     if(this.ops.has(i)||this.setup)throw Error('Audio session is busy.');
     this.ops.add(i);this.attempts[i]={attemptId:crypto.randomUUID(),stage:'prepare'};
+    this.attemptTokens.set(this.attempts[i],this.tokens?.[i]);
     try{const s=await this.prepare(i);s.stage='authorized-no-call';this.recordAttempt(i,s);}
     catch(e){const s=this.slots[i];if(s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}throw Error(this.error(e));}
     finally{this.ops.delete(i);}
@@ -419,6 +422,15 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
 
   recordAttempt(i,s){
     this.attempts[i]={attemptId:s.epoch,appliedToken:tokenFingerprint(s.profileIdentity),stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attemptTokens.set(this.attempts[i],s.profileIdentity);
+  }
+
+  // Only returned by authenticated dashboard routes. Internal correlation,
+  // screen epochs and logs continue using the opaque per-run attempt ID.
+  attemptDiagnostic(i){
+    const attempt=this.attempts[i];
+    if(!attempt)return null;
+    return {...attempt,attemptId:this.attemptTokens.get(attempt)??null,runId:attempt.attemptId};
   }
 
   async persistProfile(i,s){
@@ -526,7 +538,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         appliedToken:tokenFingerprint(s?.profileIdentity??this.tokens?.[i]),
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
-        lastAttempt:this.attempts[i],
+        lastAttempt:this.attemptDiagnostic(i),
         status:s?.status||'closed',
         connected:!!s?.connected,
         busy:this.setup||this.ops.has(i),
@@ -713,10 +725,10 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
 
   async inspect(i){
     const s=this.slots[i];
-    if(!s||s.stopped||s.crashed)return {open:false,attempt:this.attempts[i]};
+    if(!s||s.stopped||s.crashed)return {open:false,attempt:this.attemptDiagnostic(i)};
     if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
     this.ops.add(i);
-    try{await this.inspectToken(i,s,'inspect');return {open:true,attempt:this.attempts[i]};}
+    try{await this.inspectToken(i,s,'inspect');return {open:true,attempt:this.attemptDiagnostic(i)};}
     finally{this.ops.delete(i);}
   }
 
