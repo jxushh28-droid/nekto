@@ -6,6 +6,44 @@ import {join} from 'node:path';
 import {chromium} from 'playwright';
 import {VideoHost} from '../video-host.js';
 import {YapVideoHost} from '../yap-video-host.js';
+test('Yap keeps a recovering ICE session, restarts its recording and ignores an old peer closing',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
+ const context=await browser.newContext();
+ try{
+  await context.addInitScript({content:await readFile(new URL('../browser/stream-player.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('../browser/video-runtime.js',import.meta.url),'utf8')});
+  await context.route('https://yap.chat/**',route=>route.fulfill({contentType:'text/html',body:'<video id="native-remote" autoplay muted playsinline></video><button id="native">START</button>'}));
+  const page=await context.newPage();await page.goto('https://yap.chat/video');
+  await page.evaluate(()=>{
+   const props={onStart(){},status:'inCall',socket:{connected:true},currentMatch:{type:'user',roomId:'same-fixture-room'}};
+   document.getElementById('native').__reactFiber$fixture={return:{memoizedProps:props}};
+   window.fixtureAudio=new AudioContext();window.fixtureCanvas=document.createElement('canvas');window.fixtureCanvas.getContext('2d').fillRect(0,0,300,150);
+   window.fixtureStream=new MediaStream([...window.fixtureCanvas.captureStream(15).getTracks(),...window.fixtureAudio.createMediaStreamDestination().stream.getTracks()]);
+   document.getElementById('native-remote').srcObject=window.fixtureStream;
+   window.fixturePeer=new RTCPeerConnection();
+   window.setPeerState=(peer,state)=>{for(const key of ['connectionState','iceConnectionState'])Object.defineProperty(peer,key,{value:state,configurable:true});peer.dispatchEvent(new Event('connectionstatechange'));};
+   window.setPeerState(window.fixturePeer,'connected');
+   const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureStream.getVideoTracks()[0]},streams:{value:[window.fixtureStream]}});window.fixturePeer.dispatchEvent(event);
+  });
+  await page.waitForFunction(()=>window.__videoHost.status().connected);
+  const initial=await page.evaluate(()=>{window.__videoHost.routing({preview:true,enabled:false,otherConnected:false});return window.__videoHost.status();});
+  assert.equal(initial.recording,true);
+  let state=await page.evaluate(()=>{window.setPeerState(window.fixturePeer,'disconnected');return window.__videoHost.status();});
+  assert.equal(state.connected,false);assert.equal(state.ended,false);assert.equal(state.recording,false);assert.equal(state.remoteTracks.length,2);
+  await page.waitForTimeout(600);
+  state=await page.evaluate(()=>{window.setPeerState(window.fixturePeer,'connected');return window.__videoHost.status();});
+  assert.equal(state.connected,true);assert.equal(state.ended,false);assert.equal(state.recording,true);assert.ok(state.streamGeneration>initial.streamGeneration);
+  state=await page.evaluate(()=>{
+   const old=window.fixturePeer;window.fixturePeer=new RTCPeerConnection();window.setPeerState(window.fixturePeer,'connected');
+   const event=new Event('track');Object.defineProperties(event,{track:{value:window.fixtureStream.getVideoTracks()[0]},streams:{value:[window.fixtureStream]}});window.fixturePeer.dispatchEvent(event);
+   window.setPeerState(old,'closed');old.close();return window.__videoHost.status();
+  });
+  assert.equal(state.connected,true);assert.equal(state.ended,false);
+  await page.evaluate(()=>window.setPeerState(window.fixturePeer,'disconnected'));
+  await page.waitForFunction(()=>window.__videoHost.status().ended,null,{timeout:6000});
+  state=await page.evaluate(()=>window.__videoHost.status());assert.equal(state.connected,false);assert.equal(state.recording,false);
+ }finally{await context.close();await browser.close();}
+});
 test('Yap bridge carries generated video and audio in both directions',async()=>{
  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--autoplay-policy=no-user-gesture-required']});
  const host=new YapVideoHost({data:'/unused-yap',getBrowser:async()=>({newContext:async options=>{

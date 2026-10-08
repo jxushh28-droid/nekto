@@ -82,7 +82,7 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
   const createContext=browser.newContext.bind(browser);
   browser.newContext=async config=>{
    const context=await createContext(config);
-   await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><script>window.firstScriptToken=JSON.parse(localStorage.getItem('storage_audio_v2')||'{}')?.user?.authToken;</script><div id="app"></div><script>const state={user:{authToken:window.firstScriptToken,tokenId:null},system:{isAuth:false,socketConnected:false},chat:{}};document.getElementById('app').__vue__={$store:{state}};if(window===top){const socket=new WebSocket('ws://audio.nekto-me.kz:${port}/websocket/');socket.onopen=()=>{state.system.socketConnected=true;socket.send('42'+JSON.stringify(['event',{type:'register',userId:state.user.authToken}]));};socket.onmessage=()=>{state.user.tokenId=123;state.system.isAuth=true;};}</script>`+(new URL(route.request().url()).pathname==='/audiochat'?'<iframe src="/frame"></iframe>':'')}));
+   await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><script>window.firstScriptToken=JSON.parse(localStorage.getItem('storage_audio_v2')||'{}')?.user?.authToken;</script><div id="app"></div><button id="searchCompanyBtn">Start</button><script>const state={user:{authToken:window.firstScriptToken,tokenId:null},system:{isAuth:false,socketConnected:false},chat:{}};document.getElementById('app').__vue__={$store:{state}};document.getElementById('searchCompanyBtn').onclick=()=>{window.startToken=state.user.authToken;state.user.isSearching=true;};if(window===top){const socket=new WebSocket('ws://audio.nekto-me.kz:${port}/websocket/');socket.onopen=()=>{state.system.socketConnected=true;socket.send('42'+JSON.stringify(['event',{type:'register',userId:state.user.authToken}]));};socket.onmessage=()=>{state.user.tokenId=123;state.system.isAuth=true;};}</script>`+(new URL(route.request().url()).pathname==='/audiochat'?'<iframe src="/frame"></iframe>':'')}));
    return context;
   };
   return browser;
@@ -99,5 +99,12 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
    for(const frame of slot.page.frames())assert.equal(await frame.evaluate(()=>window.firstScriptToken),host.tokens[side]);
   }
   assert.notEqual(host.slots[0].context,host.slots[1].context);
+  await Promise.all([host.start(0),host.start(1)]);
+  for(const side of [0,1]){
+   const slot=host.slots[side];assert.equal(await slot.page.evaluate(()=>window.startToken),host.tokens[side]);
+   assert.equal(slot.callToken.before.savedTokenMatches,true);assert.equal(slot.callToken.before.liveTokenMatches,true);
+   assert.equal(slot.callToken.after.savedTokenMatches,true);assert.equal(slot.callToken.after.liveTokenMatches,true);
+   assert.equal(slot.wire.sentTokenMatches,true);assert.equal(slot.wire.registrationSucceeded,true);
+  }
  }finally{await host.shutdown();for(const socket of sockets)socket.destroy();await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});}
 });

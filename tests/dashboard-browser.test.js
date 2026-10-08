@@ -2,6 +2,27 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {r
 import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
 import {primeVoiceStorage} from '../voice-bootstrap.js';
 const base='https://dashboard-fixture.test';
+test('Connect both applies typed tokens and fills only empty fields from saved tokens',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),submissions=[];let saved=['saved-fixture-A','saved-fixture-B'];
+  const status={enabled:false,setup:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:''}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(route.request().method()==='POST'){submissions.push({path,data:route.request().postDataJSON()});if(path.endsWith('/tokens'))saved=submissions.at(-1).data.tokens;return route.fulfill({json:{ok:true,results:[{slot:0,ok:true},{slot:1,ok:true}]}});}
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:saved}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.waitForFunction(()=>document.querySelector('#tokenA').value==='saved-fixture-A');
+  await page.locator('#tokenA').fill('typed-fixture-A');await page.locator('#tokenB').fill('typed-fixture-B');
+  await page.locator('#connectBoth').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('B: поиск запущен'));
+  assert.deepEqual(submissions,[{path:'/api/audio/tokens',data:{tokens:['typed-fixture-A','typed-fixture-B'],consent:false}}]);
+  await page.locator('#tokenA').fill('second-fixture-A');await page.locator('#tokenB').fill('');
+  await page.locator('#connectBoth').click();await page.waitForFunction(()=>!document.querySelector('#connectBoth').disabled);
+  assert.deepEqual(submissions[1],{path:'/api/audio/tokens',data:{tokens:['second-fixture-A','typed-fixture-B'],consent:false}});
+ }finally{await browser.close();}
+});
 test('audio token exists before the first page script and settings survive reload',async()=>{
  const browser=await chromium.launch({headless:true});try{
   const context=await browser.newContext({storageState:voiceStorageState('old',{cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{lastStartDialogTime:123}})}]}]})});
