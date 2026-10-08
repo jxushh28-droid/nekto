@@ -198,10 +198,11 @@ test('latest restriction source is retained after the socket disconnects',async(
 });
 test('single-token test opens only the selected side and persists an otherwise empty configuration',async()=>{
  for(const side of [0,1]){const f=await fixture();try{
+  const other=f.host.slots[1-side];let otherClosed=0;other.browser.close=async()=>otherClosed++;
   const starts=[];f.host.requested=true;f.host.start=async i=>starts.push(i);
   const result=await f.host.applySingle(side,'single-fixture-token');
   assert.deepEqual(starts,[side]);assert.equal(result.ok,true);assert.equal(result.results.length,1);
-  assert.equal(f.host.requested,false);assert.deepEqual(f.host.slots,[null,null]);
+  assert.equal(f.host.requested,false);assert.equal(f.host.slots[side],null);assert.equal(f.host.slots[1-side],other);assert.equal(otherClosed,0);
   const saved=await loadAudioTokens(f.host.data);assert.equal(saved[side],'single-fixture-token');assert.equal(saved[1-side],null);
  }finally{await f.done();}}
 });

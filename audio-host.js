@@ -384,8 +384,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       const values=[...this.tokens];
       values[i]=token;
       const saved=await saveAudioTokens(this.data,values);
-      await this.close(0);
-      await this.close(1);
+      await this.close(i);
       this.tokens=saved;
       this.requested=false;
     }finally{
