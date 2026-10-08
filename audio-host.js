@@ -5,7 +5,7 @@ import {AudioGraph} from './audio-graph.js';
 import {saveTokens} from './token-config.js';
 import {loadAudioTokens,saveAudioTokens} from './audio-token-config.js';
 import {confirmVoiceSession,voiceReady} from './voice-session.js';
-import {primeVoiceStorage} from './voice-bootstrap.js';
+import {primeVoiceStorage,pinVoiceToken} from './voice-bootstrap.js';
 import {voiceStorageState} from './voice-storage-state.js';
 import {BrowserProfiles} from './browser-profile.js';
 import {voiceWireFrame} from './voice-wire.js';
@@ -97,6 +97,7 @@ export class AudioHost{
       await context.grantPermissions(['microphone'],{origin:'https://nekto-me.kz'});
 
       await context.addInitScript(primeVoiceStorage,this.tokens[i]);
+      await context.addInitScript(pinVoiceToken,this.tokens[i]);
       await context.addInitScript({content:runtime});
 
       const page=await context.newPage();
