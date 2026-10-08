@@ -28,6 +28,13 @@ function redactWsText(value) {
     );
 }
 
+// A non-reversible preview of a saved token: first 8 and last 5 characters,
+// so the operator can confirm which token is loaded without the panel ever
+// printing the full secret. Returns null when no token is set.
+function tokenFingerprint(token){
+  if(typeof token!=='string'||!token)return null;
+  return token.length<=14?token.slice(0,3)+'…':token.slice(0,8)+'…'+token.slice(-5);
+}
 
 export class AudioHost{
   constructor({data,graph=new AudioGraph(),launch=options=>chromium.launch(options)}){
@@ -410,7 +417,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
   }
 
   recordAttempt(i,s){
-    this.attempts[i]={attemptId:s.epoch,stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
+    this.attempts[i]={attemptId:s.epoch,appliedToken:tokenFingerprint(s.profileIdentity),stage:s.stage||'prepare',status:s.status,stopped:!!s.stopped,paused:!!s.paused,bootstrap:s.bootstrap?{ok:s.bootstrap.ok,reason:s.bootstrap.reason,phase:s.bootstrap.phase||null}:null,authorization:s.authorization?{...s.authorization}:null,tokenInspection:s.tokenInspection?{...s.tokenInspection}:null,callToken:s.callToken?{...s.callToken}:null,wire:s.wire?{...s.wire}:null,profile:s.profile?{...s.profile}:null,lastState:s.lastState?{...s.lastState}:null,microphone:s.microphone?{...s.microphone}:null};
   }
 
   async persistProfile(i,s){
@@ -515,6 +522,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         paused:!!s?.paused,
         interactive:!!s&&!s.stopped&&!s.crashed&&!this.ops.has(i)&&!this.setup,
         attemptId:s?.epoch||null,
+        appliedToken:tokenFingerprint(s?.profileIdentity??this.tokens?.[i]),
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
         lastAttempt:this.attempts[i],
