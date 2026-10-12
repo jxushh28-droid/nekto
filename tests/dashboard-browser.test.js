@@ -201,6 +201,7 @@ test('audio panel shows the native screen and keeps the final failure image visi
    const url=new URL(route.request().url());let body,type='application/json';
    if(url.pathname.endsWith('/screen')){requests++;return route.fulfill({body:image,contentType:'image/png',headers:{'X-Screen-Time':String(Date.now())}});}
    if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/proxies'))body=JSON.stringify({proxies:[null,null]});
    else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:!stopped,closable:true,stopped,screenAvailable:true,attemptId:'fixture-A',status:stopped?'verification':'ready',busy:false,connected:false,level:0,db:-60,error:''},{open:false,status:'closed',busy:false,connected:false,level:0,db:-60}]});
    else {const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}
    await route.fulfill({body,contentType:type});
@@ -223,6 +224,7 @@ test('audio browser tools send normalized clicks, text and keys only for the dis
    if(url.pathname.endsWith('/stream'))return route.fulfill({body:': fixture\n\n',contentType:'text/event-stream'});
    if(url.pathname.endsWith('/input')){submissions.push(JSON.parse(route.request().postData()));body=JSON.stringify({ok:true});}
    else if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/proxies'))body=JSON.stringify({proxies:[null,null]});
    else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:true,interactive:true,paused:true,screenAvailable:true,attemptId:epoch,status:'verification',busy:false,connected:false,error:'',callToken:{before:{liveTokenMatches:true,savedTokenMatches:true},after:{liveTokenMatches:true,savedTokenMatches:true}}},{open:false,status:'closed',busy:false,connected:false,error:''}]});
    else if(url.pathname.endsWith('/inspect'))body=JSON.stringify({open:true,attempt:{tokenInspection:{liveTokenMatches:true,savedTokenMatches:true}}});
    else{const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}

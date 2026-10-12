@@ -127,6 +127,7 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
    const path=new URL(route.request().url()).pathname;
    if(path.endsWith('/status'))return route.fulfill({json:host.status()});
    if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:host.tokens}});
+   if(path.endsWith('/proxies'))return route.fulfill({json:{proxies:host.proxies}});
    if(path.endsWith('/screen'))return route.fulfill({status:204});
    if(path==='/api/audio/0/token'){
     const data=route.request().postDataJSON();submissions.push(data);
