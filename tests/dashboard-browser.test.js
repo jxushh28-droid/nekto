@@ -2,6 +2,31 @@ import {test} from 'node:test';import assert from 'node:assert/strict';import {r
 import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
 import {primeVoiceStorage} from '../voice-bootstrap.js';
 const base='https://dashboard-fixture.test';
+test('audio IP button checks only its current browser and renders the returned address',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),requests=[];
+  const status={enabled:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',attemptId:i?'ip-b':'ip-a',open:true,status:'ready',connected:false,busy:false}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(path.endsWith('/screen'))return route.fulfill({status:204});
+    if(path==='/api/audio/0/ip'){
+     requests.push(route.request().postDataJSON());status.slots[0].browserIp={ip:'203.0.113.12',epoch:'ip-a',checkedAt:Date.now()};
+     return route.fulfill({json:status.slots[0].browserIp});
+    }
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:['fixture-token-a','fixture-token-b']}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');
+  await page.locator('#card0 .checkIp').click();await page.waitForFunction(()=>document.querySelector('#card0 .browserIp').textContent.includes('203.0.113.12'));
+  assert.deepEqual(requests,[{epoch:'ip-a'}]);assert.equal(await page.locator('#card1 .browserIp').textContent(),'IP браузера: —');
+  status.slots[0]={...status.slots[0],open:false,browserIp:null};
+  await page.waitForFunction(()=>document.querySelector('#card0 .checkIp').disabled&&document.querySelector('#card0 .browserIp').textContent==='IP браузера: —');
+ }finally{await browser.close();}
+});
 async function openAudioTools(page){await page.locator('.audioAdvanced').first().waitFor({state:'attached'});for(const summary of await page.locator('.audioAdvanced>summary').all())await summary.click();}
 test('Connect both applies typed tokens and fills only empty fields from saved tokens',async()=>{
  const browser=await chromium.launch({headless:true});try{

@@ -46,7 +46,6 @@ function renderControls(){
   $('applyTokens').disabled=busy;$('connectBoth').disabled=busy||paired;
   $('bridge').className=paired?'active':'';$('bridge').textContent=paired?'A ↔ B · оба на связи':'Ожидаем двух собеседников';
   $('message').disabled=!paired||!s.enabled;$('send').disabled=!paired||!s.enabled||sending;
-  $('composerHint').textContent=paired?'Каждое сообщение отправляется A + B':'Дождитесь двух подключений';
   s.slots.forEach((m,i)=>{const card=$('card'+i),slotBusy=busy||m.opening;
     card.querySelector('.state').textContent=statuses[m.status]||m.status;card.classList.toggle('isConnected',!!m.connected);
     card.querySelector('.issue').textContent=m.detail||m.error||'';

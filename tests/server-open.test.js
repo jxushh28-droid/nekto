@@ -23,10 +23,11 @@ test('audio screen endpoint requires panel authentication and returns no image f
   const base='http://127.0.0.1:'+port;let ready=false;for(let n=0;n<100;n++){try{ready=(await fetch(base+'/health')).ok;if(ready)break;}catch{}await new Promise(r=>setTimeout(r,50));}assert.equal(ready,true);
   assert.equal((await fetch(base+'/api/audio/0/screen')).status,401);
   assert.equal((await fetch(base+'/api/audio/0/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:'fixture-token'})})).status,401);
-  for(const action of ['input','inspect'])assert.equal((await fetch(base+'/api/audio/0/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
+  for(const action of ['input','inspect','ip'])assert.equal((await fetch(base+'/api/audio/0/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).status,401);
   const login=await fetch(base+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:'fixture-screen-panel-password'})});assert.equal(login.status,200);
   const cookie=login.headers.get('set-cookie').split(';')[0],response=await fetch(base+'/api/audio/0/screen',{headers:{Cookie:cookie}});assert.equal(response.status,204);assert.equal(await response.text(),'');assert.equal(response.headers.get('cache-control'),'no-store');
   const inputHeaders={Cookie:cookie,'Content-Type':'application/json'};
+  const ip=await fetch(base+'/api/audio/0/ip',{method:'POST',headers:inputHeaders,body:JSON.stringify({epoch:'fixture'})});assert.equal(ip.status,400);assert.match((await ip.json()).error,/browser is closed/);
   const input=await fetch(base+'/api/audio/0/input',{method:'POST',headers:inputHeaders,body:JSON.stringify({epoch:'fixture',action:'key',key:'Enter'})});assert.equal(input.status,400);assert.match((await input.json()).error,/browser is closed/);
   assert.equal((await fetch(base+'/api/audio/0/input',{method:'POST',headers:{...inputHeaders,Origin:'https://other.test'},body:'{}'})).status,403);
   const inspect=await fetch(base+'/api/audio/0/inspect',{method:'POST',headers:inputHeaders,body:'{}'});assert.equal(inspect.status,200);assert.deepEqual(await inspect.json(),{open:false,attempt:null});

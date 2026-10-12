@@ -12,6 +12,7 @@ import {voiceWireFrame} from './voice-wire.js';
 import {inspectVoiceToken,readVoiceStorageToken} from './voice-inspection.js';
 import {validateNativeInput} from './native-input.js';
 import {advanceAudioCall} from './audio-call/call-controls.js';
+import {readBrowserIp} from './browser-ip.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat#/';
@@ -53,6 +54,7 @@ export class AudioHost{
     this.ops=new Set();
     this.attempts=[null,null];
     this.storageReceipts=new WeakMap();
+    this.ipRequests=new WeakMap();
     this.screens=[null,null];
     this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
     this.timer=setInterval(()=>void this.tick(),500);
@@ -580,6 +582,7 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         interactive:!!s&&!s.stopped&&!s.crashed&&!this.ops.has(i)&&!this.setup,
         storageAvailable:!!s&&!s.stopped&&!s.crashed&&s.stage!=='reload'&&typeof s.page?.url==='function'&&s.page.url().startsWith('https://nekto-me.kz/'),
         attemptId:s?.epoch||null,
+        browserIp:s?.browserIp&&s.browserIp.epoch===s.epoch?s.browserIp:null,
         appliedToken:tokenFingerprint(s?.profileIdentity??this.tokens?.[i]),
         stage:s?.stage||null,
         bootstrap:s?.bootstrap||null,
@@ -801,6 +804,28 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       if(this.slots[i]===s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}
       throw Error(this.error(e));
     }finally{this.ops.delete(i);}
+  }
+
+  async checkIp(i,epoch){
+    const s=this.slots[i];
+    if(!s||s.stopped||s.crashed||!s.context)throw Error('Audio browser is closed. Open this side first.');
+    if(epoch!==s.epoch)throw Error('Audio session changed. Check the current browser again.');
+    if(this.setup||this.ops.has(i))throw Error('Audio session is busy.');
+    if(this.ipRequests.has(s))return this.ipRequests.get(s);
+    const request=(async()=>{
+      try{
+        const ip=await readBrowserIp(s.context);
+        if(this.slots[i]!==s||s.epoch!==epoch||s.stopped||s.crashed)throw Error('Audio session changed during IP check.');
+        s.browserIp={ip,epoch,checkedAt:Date.now()};
+        return {...s.browserIp};
+      }catch(e){
+        if(this.slots[i]!==s||s.epoch!==epoch||s.stopped||s.crashed)throw Error('Audio session changed during IP check.');
+        s.browserIp={ip:null,epoch,error:'IP check failed',checkedAt:Date.now()};
+        throw Error('Audio browser IP could not be checked. Try again.');
+      }finally{this.ipRequests.delete(s);}
+    })();
+    this.ipRequests.set(s,request);
+    return request;
   }
 
   async inspect(i){
