@@ -22,6 +22,7 @@
   return d;
  }
  window.__textHost={
+  acceptRules:NTGAdapter.acceptRules,
   poll(){const d=read(),messages=[];for(const m of d.messages){if(seen.get(m.el)===m.text||(m.key&&seenKeys.has(m.key)))continue;seen.set(m.el,m.text);if(m.key)seenKeys.add(m.key);if(connected)messages.push({id:doc+':'+(++counter),text:m.text});}return {...state,messages};},
   async send(text,epoch){
    const d=read();if(!connected||state.epoch!==epoch)return 'changed';if(d.native){

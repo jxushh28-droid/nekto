@@ -3,6 +3,7 @@
 export async function startConversation(page,{wait=ms=>new Promise(r=>setTimeout(r,ms)),onState=()=>{}}={}){
  let requested=false;
  for(let attempt=0;attempt<30;attempt++){
+  if(await page.evaluate(()=>window.__textHost?.acceptRules?.())){requested=false;await wait(500);continue;}
   const state=await page.evaluate(()=>window.__textHost?.status());
   if(state){onState(state);
    if(['verification','blocked'].includes(state.status))throw new Error(state.detail||'The site requires verification.');

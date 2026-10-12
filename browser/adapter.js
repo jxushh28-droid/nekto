@@ -11,6 +11,22 @@ const NTGAdapter=(()=>{
   function blocking(){const v=verification();return {verification:v,required:v.known?(v.captcha||v.hcaptcha):['#mask_cap','#mask_hcap'].some(s=>visible(document.querySelector(s))),element:['#mask_bad','#mask_bad_inet','.swal2-popup'].map(s=>document.querySelector(s)).find(visible)};}
   const query=s=>{try{return Array.from(document.querySelectorAll(s));}catch{return [];}};
   const one=s=>query(s).find(visible);
+  const acceptedRules=new WeakSet();
+  function acceptRules(){
+    // Use the site's own consent control, scoped to the ordinary text-chat rules.
+    const popups=query('[role="dialog"],.modal,.swal2-popup,.sweet-alert,[id*="rule" i]');
+    for(const popup of popups){
+      if(!visible(popup))continue;
+      const headings=Array.from(popup.querySelectorAll('.modal-title,.modal-header,.swal2-title,.swal-title,h1,h2,h3,h4,[role="heading"]'));
+      if(!headings.some(el=>/Правила\s+чата\s*["«„“]?\s*Общение\s*["»“”]?\s*$/i.test((el.textContent||'').trim())))continue;
+      const buttons=Array.from(popup.querySelectorAll('button,[role="button"],input[type="button"],input[type="submit"]'));
+      const button=buttons.find(el=>visible(el)&&!el.disabled&&el.getAttribute('aria-disabled')!=='true'&&
+        (/^(?:я\s+)?(?:принимаю(?:\s+правила(?:\s+чата)?)?|принять(?:\s+правила(?:\s+чата)?)?|согласен|согласна|согласен\s+с\s+правилами|согласна\s+с\s+правилами|понятно|продолжить|ок|ok)[.!]?$/i.test((el.textContent||el.value||'').trim())||el.matches('.swal2-confirm,.sweet-alert .confirm')));
+      if(!button||acceptedRules.has(button))continue;
+      acceptedRules.add(button);button.click();return true;
+    }
+    return false;
+  }
   const incomingCandidates=['.message.incoming','.message.received','.message.other','.message.companion','.message.stranger','.message--incoming','.chat-message.partner','.companion_message','.message_company','.msg.incoming','[data-direction="incoming"]','[data-sender="stranger"]'];
   function detect(){
     const editor=one('.emojionearea-editor'),sendButton=one('#sendMessageBtn');
@@ -67,5 +83,5 @@ const NTGAdapter=(()=>{
     input.dispatchEvent(new Event('input',{bubbles:true}));
     input.dispatchEvent(new Event('change',{bubbles:true}));
   }
-  return {client,visible,one,detect,selector,read,value,setValue};
+  return {client,visible,one,detect,selector,read,value,setValue,acceptRules};
 })();
