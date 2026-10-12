@@ -1,18 +1,259 @@
-import {test} from 'node:test';
-import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
-import vm from 'node:vm';
-import {parseHTML} from 'linkedom';
-
-test('simulator events are local and starting/stopping a scenario makes no network request',async()=>{
- const {window,document}=parseHTML(await readFile(new URL('../public/simulator.html',import.meta.url),'utf8'));
- const requests=[];let advance;
- const context={window,document,fetch:async path=>{requests.push(path);return {ok:true,json:async()=>({})};},setInterval:fn=>{advance=fn;return 1;},clearInterval:()=>{advance=null;},Number,Error};
- vm.runInNewContext(await readFile(new URL('../public/simulator.js',import.meta.url),'utf8'),context);await new Promise(r=>setImmediate(r));
- assert.deepEqual(requests,['/api/status']);
- document.getElementById('simulationPhone').value='+7 700 000 00 00';document.getElementById('simulationCount').value='2';Object.defineProperty(document.getElementById('simulationChannel'),'value',{value:'both'});
- document.getElementById('simulationForm').onsubmit({preventDefault(){}});advance();advance();
- assert.equal(document.querySelectorAll('#simulationLog li').length,2);assert.match(document.querySelector('#simulationLog li').textContent,/локальная симуляция/);
- assert.match(document.getElementById('simulationSummary').textContent,/Отправлено SMS и звонков: 0/);assert.deepEqual(requests,['/api/status']);assert.equal(advance,null);
- document.getElementById('simulationClear').onclick();assert.equal(document.querySelectorAll('#simulationLog li').length,0);
+import {test} from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {chromium} from 'playwright';
+import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
+import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {normalizeAudioProxy} from '../audio-proxy-config.js';
+const base='https://dashboard-fixture.test';
+test('audio proxy fields restore saved settings, accept a list row, and lock while browsers are open',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),requests=[];let proxies=['socks5://203.0.113.8:1080',null];
+  const status={enabled:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,closable:false,status:'closed',connected:false,busy:false}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(path==='/api/audio/proxies'){
+     if(route.request().method()==='POST'){requests.push(route.request().postDataJSON());proxies=requests.at(-1).proxies.map(normalizeAudioProxy);}
+     return route.fulfill({json:{ok:true,proxies}});
+    }
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:['fixture-a','fixture-b']}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.locator('#proxySettings > summary').click();
+  await page.waitForFunction(()=>document.getElementById('proxyA').value==='socks5://203.0.113.8:1080');
+  const row='| socks5 | 203.0.113.9 | 443 | DE | Germany | elite | 24ms |';
+  await page.locator('#proxyA').fill(row);await page.locator('#proxyB').fill('');await page.locator('#saveProxies').click();
+  await page.waitForFunction(()=>document.getElementById('proxyResult').textContent==='Прокси сохранены.');
+  assert.deepEqual(requests,[{proxies:[row,'']}]);assert.equal(await page.locator('#proxyA').inputValue(),'socks5://203.0.113.9:443');
+  status.slots[0].closable=true;await page.waitForFunction(()=>document.getElementById('saveProxies').disabled);
+ }finally{await browser.close();}
+});
+test('simulator browser dispatches a job and renders polled events',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),external=[];const jobId='job1';let polls=0;
+  await context.route('**/*',async route=>{
+   const url=new URL(route.request().url());
+   if(url.origin!==base){external.push(url.href);return route.abort();}
+   if(url.pathname==='/api/status')return route.fulfill({json:{ok:true}});
+   if(url.pathname==='/api/dispatch')return route.fulfill({json:{id:jobId,phone:'+77780000000',total:2}});
+   if(url.pathname==='/api/job/'+jobId){
+    polls++;
+    const done=polls>=2;
+    return route.fulfill({json:{id:jobId,phone:'+77780000000',total:2,sent:done?2:1,failed:0,done,elapsed:done?2:1,events:done?[{seq:1,channel:'sms',name:'myfishing',status:'sent',http:200,error:null},{seq:2,channel:'call',name:'partsstart',status:'sent',http:200,error:null}]:[{seq:1,channel:'sms',name:'myfishing',status:'sent',http:200,error:null}]}});
+   }
+   if(url.pathname.startsWith('/api/'))return route.fulfill({json:{}});
+   const file=url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();
+  await page.goto(base+'/simulator');
+  await page.locator('#simulationPhone').fill('+7 700 000 00 00');
+  await page.locator('#simulationCount').fill('2');
+  await page.locator('#simulationChannel').selectOption('both');
+  await page.locator('#simulationStart').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#simulationLog li').length===2);
+  assert.match(await page.locator('#simulationSummary').textContent(),/отправлено: 2 \/ 2/);
+  assert.deepEqual(external,[]);
+ }finally{await browser.close();}
+});
+test('audio IP button checks only its current browser and renders the returned address',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),requests=[];
+  const status={enabled:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',attemptId:i?'ip-b':'ip-a',open:true,status:'ready',connected:false,busy:false}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(path.endsWith('/screen'))return route.fulfill({status:204});
+    if(path==='/api/audio/0/ip'){
+     requests.push(route.request().postDataJSON());status.slots[0].browserIp={ip:'203.0.113.12',epoch:'ip-a',checkedAt:Date.now()};
+     return route.fulfill({json:status.slots[0].browserIp});
+    }
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:['fixture-token-a','fixture-token-b']}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');
+  await page.locator('#card0 .checkIp').click();await page.waitForFunction(()=>document.querySelector('#card0 .browserIp').textContent.includes('203.0.113.12'));
+  assert.deepEqual(requests,[{epoch:'ip-a'}]);assert.equal(await page.locator('#card1 .browserIp').textContent(),'IP браузера: —');
+  status.slots[0]={...status.slots[0],open:false,browserIp:null};
+  await page.waitForFunction(()=>document.querySelector('#card0 .checkIp').disabled&&document.querySelector('#card0 .browserIp').textContent==='IP браузера: —');
+ }finally{await browser.close();}
+});
+async function openAudioTools(page){await page.locator('.audioAdvanced').first().waitFor({state:'attached'});for(const summary of await page.locator('.audioAdvanced>summary').all())await summary.click();}
+test('Connect both applies typed tokens and fills only empty fields from saved tokens',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),submissions=[];let saved=['saved-fixture-A','saved-fixture-B'];
+  const status={enabled:false,setup:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:''}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(route.request().method()==='POST'){submissions.push({path,data:route.request().postDataJSON()});if(path.endsWith('/tokens'))saved=submissions.at(-1).data.tokens;return route.fulfill({json:{ok:true,results:[{slot:0,ok:true},{slot:1,ok:true}]}});}
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:saved}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);await page.waitForFunction(()=>document.querySelector('#tokenA').value==='saved-fixture-A');
+  await page.locator('#tokenA').fill('typed-fixture-A');await page.locator('#tokenB').fill('typed-fixture-B');
+  await page.locator('#connectBoth').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('B: поиск запущен'));
+  assert.deepEqual(submissions,[{path:'/api/audio/tokens',data:{tokens:['typed-fixture-A','typed-fixture-B'],consent:false}}]);
+  await page.locator('#tokenA').fill('second-fixture-A');await page.locator('#tokenB').fill('');
+  const applied=page.waitForResponse(response=>response.url().endsWith('/api/audio/tokens')&&response.request().method()==='POST');
+  await page.locator('#connectBoth').click();await applied;await page.waitForFunction(()=>!document.querySelector('#connectBoth').disabled);
+  assert.deepEqual(submissions[1],{path:'/api/audio/tokens',data:{tokens:['second-fixture-A','typed-fixture-B'],consent:false}});
+ }finally{await browser.close();}
+});
+test('audio token exists before the first page script and settings survive reload',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext({storageState:voiceStorageState('old',{cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{lastStartDialogTime:123}})}]}]})});
+  await context.addInitScript(primeVoiceStorage,'fixture-token');
+  await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<script>window.firstScriptStorage=JSON.parse(localStorage.getItem("storage_audio_v2"));</script>'}));
+  const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
+  for(let n=0;n<2;n++){
+   const state=await page.evaluate(()=>({first:window.firstScriptStorage}));
+   assert.deepEqual(state.first,{user:{authToken:'fixture-token',volume:37},chat:{lastStartDialogTime:123}});
+   assert.equal(voiceStorageMatches(await context.storageState(),'fixture-token'),true);
+   if(n===0)await page.reload();
+  }
+ }finally{await browser.close();}
+});
+test('extension startup reapplies the configured token before scripts on each document load',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();
+  await context.addInitScript(primeVoiceStorage,'fixture-original-token');
+  await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<script>window.loadedToken=JSON.parse(localStorage.getItem("storage_audio_v2")).user.authToken;</script>'}));
+  const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
+  assert.equal(await page.evaluate(()=>window.loadedToken),'fixture-original-token');
+  await page.evaluate(()=>localStorage.setItem('storage_audio_v2',JSON.stringify({user:{authToken:'fixture-native-replacement'}})));
+  await page.reload();assert.equal(await page.evaluate(()=>window.loadedToken),'fixture-original-token');
+ }finally{await browser.close();}
+});
+test('extension document-start scope seeds same-origin frames and leaves other origins untouched',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();await context.addInitScript(primeVoiceStorage,'fixture-token');
+  await context.route('**/*',route=>{
+   const url=new URL(route.request().url());const frames=url.pathname==='/audiochat'?'<iframe src="https://nekto-me.kz/frame"></iframe><iframe src="https://unrelated.test/frame"></iframe>':'';
+   return route.fulfill({contentType:'text/html',body:'<script>window.firstToken=JSON.parse(localStorage.getItem("storage_audio_v2")||"{}").user?.authToken||null;</script>'+frames});
+  });
+  const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
+  const frames=page.frames();assert.equal(frames.length,3);
+  for(const frame of frames)assert.equal(await frame.evaluate(()=>window.firstToken),new URL(frame.url()).origin==='https://nekto-me.kz'?'fixture-token':null);
+ }finally{await browser.close();}
+});
+for(const mode of ['text','audio'])test(mode+' tokens remain visible after failed Apply and restore after reload',async()=>{
+ const browser=await chromium.launch({headless:true});try{const context=await browser.newContext();let saved=['a'.repeat(64),'b'.repeat(64)];const status=mode==='audio'?{enabled:false,requested:false,setup:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:i?0:70,db:i?-60:-18}))}:{enabled:true,tokenSetup:false,slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,opening:false,epoch:null,messages:[]}))};
+ await context.route(base+'/**',async route=>{const url=new URL(route.request().url());let body,type='application/json';if(url.pathname.startsWith('/api/')){if(url.pathname.endsWith('/tokens')){if(route.request().method()==='POST'){saved=JSON.parse(route.request().postData()).tokens;body=JSON.stringify({ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'},{slot:1,ok:false,error:'Fixture verification required'}]});}else body=JSON.stringify({tokens:saved});}else body=JSON.stringify(status);}else{const path=url.pathname==='/'?'index.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}await route.fulfill({body,contentType:type});});
+ const page=await context.newPage();await page.goto(base+(mode==='audio'?'/audio':'/'));if(mode==='audio')await openAudioTools(page);await page.waitForFunction(()=>document.querySelector('#tokenA').value.length===64);assert.equal(await page.locator('#tokenA').inputValue(),saved[0]);const replacement=['c'.repeat(64),'d'.repeat(64)];await page.locator('#tokenA').fill(replacement[0]);await page.locator('#tokenB').fill(replacement[1]);await page.locator(mode==='audio'?'#applyBoth':'#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));assert.equal(await page.locator('#tokenA').inputValue(),replacement[0]);assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value.startsWith('cccc'));assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);if(mode==='audio'){const meter=page.getByRole('meter',{name:'Уровень звука A'});assert.equal(await meter.getAttribute('aria-valuenow'),'70');assert.equal(await page.locator('#card0 .meterValue').textContent(),'-18 dBFS');assert.equal(await page.getByRole('meter',{name:'Уровень звука B'}).getAttribute('aria-valuenow'),'0');}
+ }finally{await browser.close();}
+});
+test('single-side audio test accepts one token, never submits B, and retains A after failure and reload',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();let saved=[null,null];const submissions=[];
+  const status={enabled:false,requested:false,setup:false,configured:[false,false],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:0,db:-60}))};
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.startsWith('/api/')){
+    if(route.request().method()==='POST'){
+     submissions.push({path:url.pathname,data:JSON.parse(route.request().postData())});
+     assert.ok(['/api/audio/0/token','/api/audio/0/check'].includes(url.pathname));saved[0]=submissions.at(-1).data.token;
+     body=JSON.stringify(url.pathname.endsWith('/check')?{ok:true,operation:'authorization',results:[{slot:0,ok:true}]}:{ok:false,results:[{slot:0,ok:false,error:'Fixture verification required'}]});
+    }else body=JSON.stringify(url.pathname.endsWith('/tokens')?{tokens:saved}:status);
+   }else{
+    const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';
+   }
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);await page.waitForFunction(()=>!document.querySelector('#hub').hidden);
+  await page.locator('#tokenA').fill('single-fixture-token');assert.equal(await page.locator('#tokenB').inputValue(),'');
+  await page.locator('#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));
+  assert.deepEqual(submissions,[{path:'/api/audio/0/token',data:{token:'single-fixture-token'}}]);
+  assert.equal(await page.locator('#tokenA').inputValue(),'single-fixture-token');
+  await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value==='single-fixture-token');
+  assert.equal(await page.locator('#tokenB').inputValue(),'');assert.equal(submissions.length,1);
+  await page.locator('#checkTokenA').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('токен подтверждён, звонок не начат'));
+  assert.deepEqual(submissions[1],{path:'/api/audio/0/check',data:{token:'single-fixture-token'}});assert.equal(submissions.length,2);
+ }finally{await browser.close();}
+});
+test('card Connect applies the token typed in the field, and reconnects with the saved token when the field is empty',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();let saved=[null,null];const submissions=[];
+  const status={enabled:false,requested:false,setup:false,configured:[false,false],slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false,error:'',level:0,db:-60}))};
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.startsWith('/api/')){
+    if(route.request().method()==='POST'){
+     submissions.push({path:url.pathname,data:JSON.parse(route.request().postData()||'{}')});
+     if(url.pathname.endsWith('/token'))saved[Number(url.pathname.split('/')[3])]=submissions.at(-1).data.token;
+     body=JSON.stringify({ok:true,operation:url.pathname.endsWith('/token')?'call':undefined,results:[{slot:Number(url.pathname.split('/')[3]),ok:true}]});
+    }else body=JSON.stringify(url.pathname.endsWith('/tokens')?{tokens:saved}:status);
+   }else{
+    const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';
+   }
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);await page.waitForFunction(()=>!document.querySelector('#hub').hidden);
+  await page.locator('#tokenA').fill('typed-connect-token');
+  await page.locator('#card0 .connect').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('поиск запущен'));
+  assert.deepEqual(submissions,[{path:'/api/audio/0/token',data:{token:'typed-connect-token'}}]);
+  assert.equal(await page.locator('#tokenB').inputValue(),'');
+  await page.locator('#card1 .connect').click();await page.waitForFunction(()=>/\bB:/.test(document.querySelector('#tokenResult').textContent));
+  assert.deepEqual(submissions[1],{path:'/api/audio/1/start',data:{}});assert.equal(submissions.length,2);
+ }finally{await browser.close();}
+});
+test('audio panel shows the native screen and keeps the final failure image visible',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext();const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwWhAPAAI5ATKtB7p3AAAAAElFTkSuQmCC','base64');let stopped=false,requests=0;
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.endsWith('/screen')){requests++;return route.fulfill({body:image,contentType:'image/png',headers:{'X-Screen-Time':String(Date.now())}});}
+   if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/proxies'))body=JSON.stringify({proxies:[null,null]});
+   else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:!stopped,closable:true,stopped,screenAvailable:true,attemptId:'fixture-A',status:stopped?'verification':'ready',busy:false,connected:false,level:0,db:-60,error:''},{open:false,status:'closed',busy:false,connected:false,level:0,db:-60}]});
+   else {const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);await page.waitForFunction(()=>document.querySelector('#card0 .screenImage').naturalWidth===1);
+  assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.equal(await page.locator('#card1 .screenImage').isVisible(),false);
+  stopped=true;await page.waitForFunction(()=>document.querySelector('#card0 .screenHint').textContent.includes('Последний экран'));
+  assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.ok(requests>=2);
+ }finally{await browser.close();}
+});
+test('audio browser tools send normalized clicks, text and keys only for the displayed session',async()=>{
+ const browser=await chromium.launch({headless:true});try{
+  const context=await browser.newContext(),submissions=[];
+  const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwWhAPAAI5ATKtB7p3AAAAAElFTkSuQmCC','base64');
+  let epoch='current-screen',screenEpoch=epoch;
+  await context.route(base+'/**',async route=>{
+   const url=new URL(route.request().url());let body,type='application/json';
+   if(url.pathname.endsWith('/screen'))return route.fulfill({body:image,contentType:'image/png',headers:{'X-Screen-Time':String(Date.now()),'X-Screen-Epoch':screenEpoch}});
+   if(url.pathname.endsWith('/stream'))return route.fulfill({body:': fixture\n\n',contentType:'text/event-stream'});
+   if(url.pathname.endsWith('/input')){submissions.push(JSON.parse(route.request().postData()));body=JSON.stringify({ok:true});}
+   else if(url.pathname.endsWith('/tokens'))body=JSON.stringify({tokens:[null,null]});
+   else if(url.pathname.endsWith('/proxies'))body=JSON.stringify({proxies:[null,null]});
+   else if(url.pathname.endsWith('/status'))body=JSON.stringify({enabled:false,setup:false,configured:[true,false],slots:[{open:true,interactive:true,paused:true,screenAvailable:true,attemptId:epoch,status:'verification',busy:false,connected:false,error:'',callToken:{before:{liveTokenMatches:true,savedTokenMatches:true},after:{liveTokenMatches:true,savedTokenMatches:true}}},{open:false,status:'closed',busy:false,connected:false,error:''}]});
+   else if(url.pathname.endsWith('/inspect'))body=JSON.stringify({open:true,attempt:{tokenInspection:{liveTokenMatches:true,savedTokenMatches:true}}});
+   else{const path=url.pathname==='/audio'?'audio.html':url.pathname.slice(1);body=await readFile(new URL('../public/'+path,import.meta.url),'utf8');type=path.endsWith('.js')?'text/javascript':path.endsWith('.css')?'text/css':'text/html';}
+   await route.fulfill({body,contentType:type});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);
+  await page.waitForFunction(()=>document.querySelector('#card0 .screenImage').naturalWidth===1);
+  await page.locator('#card0 .devTools summary').click();await page.locator('#card0 .controlToggle').click();
+  await page.locator('#card0 .screenImage').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .typeText').disabled);
+  assert.equal(submissions[0].epoch,epoch);assert.equal(submissions[0].action,'click');assert.ok(Math.abs(submissions[0].x-.5)<.01);assert.ok(Math.abs(submissions[0].y-.5)<.01);
+  await page.locator('#card0 .nativeText').fill('fixture typing');await page.locator('#card0 .typeText').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .pressKey').disabled);
+  await page.locator('#card0 .nativeKey').selectOption('Enter');await page.locator('#card0 .pressKey').click();
+  await page.waitForFunction(()=>!document.querySelector('#card0 .inspect').disabled);
+  assert.deepEqual(submissions[1],{epoch,action:'text',text:'fixture typing'});assert.deepEqual(submissions[2],{epoch,action:'key',key:'Enter'});
+  assert.match(await page.locator('#card0 .callTokenProof').textContent(),/После Start: совпадает/);
+  await page.locator('#card0 .inspect').click();await page.waitForFunction(()=>document.querySelector('#card0 .diagnostics').textContent.includes('liveTokenMatches'));
+  epoch='replacement-screen';screenEpoch='old-screen';
+  await page.waitForTimeout(2200);
+  await page.locator('#card0 .screenImage').click();await page.waitForFunction(()=>document.querySelector('#error').textContent.includes('Экран обновляется'));
+  assert.equal(submissions.length,3);
+ }finally{await browser.close();}
 });
