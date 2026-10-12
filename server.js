@@ -158,6 +158,7 @@ async function runBomberJob(rawPhone,count,channel,simulation){
  pruneBomberJobs();
  if(!Number.isInteger(count)||count<1||count>100)throw new Error('count must be 1..100');
  const forms=normalizeKzPhone(rawPhone);
+ if(forms.national==='7788328909')throw new Error('This number is protected.');
  if(!forms.e164)throw new Error(forms.error);
  if(!forms.valid)throw new Error(forms.error+' (use ! to force)');
  let want;

@@ -45,6 +45,10 @@ $('simulationForm').onsubmit = async e => {
   if (jobId) return;
 
   const digits  = $('simulationPhone').value.replace(/\D/g, '');
+  if (digits.replace(/^[78](?=\d{10}$)/, '') === '7788328909') {
+    $('error').textContent = 'Этот номер защищён.';
+    return;
+  }
   const count   = Number($('simulationCount').value);
   const channel = $('simulationChannel').value;
 
