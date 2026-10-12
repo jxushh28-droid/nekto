@@ -85,7 +85,9 @@ export class AudioHost{
         headless:true,
         channel:'chromium',
         ignoreDefaultArgs:['--mute-audio'],
-        args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required',...(proxy?['--force-webrtc-ip-handling-policy=disable_non_proxied_udp']:[])],
+        args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required',
+          '--disable-background-timer-throttling','--disable-renderer-backgrounding',
+          ...(proxy?['--force-webrtc-ip-handling-policy=disable_non_proxied_udp']:[])],
         ...(proxy?{proxy}:{}),
         env:this.graph.browserEnv(i)
       });

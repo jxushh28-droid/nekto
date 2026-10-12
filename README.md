@@ -1,13 +1,12 @@
-# Nekto Local — Chrome extension + local dashboard
+# Nekto Local — local website
 
 ## Start
 
 1. Extract the whole package to a permanent folder. Install and start [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS), or Docker Engine with Compose v2 (Linux). Windows Docker must use Linux containers.
 2. Run **start-windows.cmd**, **start-macos.command**, or `bash start-linux.sh`. The first build downloads a large browser image and runs checks; allow several minutes. Later starts reuse it.
-3. In Chrome, open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select the package’s **extension** folder.
-4. Pin **Nekto Local** and click it. It opens `http://127.0.0.1:3100/audio`. The Text, Audio, Video and offline Simulator tabs remain available.
+3. Open **http://127.0.0.1:3100/audio** in your browser. The Text, Audio, Video and offline Simulator tabs remain available. No extension is needed.
 
-No dashboard password is required locally. The helper must be running; if it is stopped, the extension shows setup instructions. Chrome cannot start Docker by itself. The launcher also opens the dashboard, so you can use it without the extension.
+No dashboard password is required locally. Keep Docker running while using the website. The Windows and macOS launchers open the website after startup. The optional extension in this source tree is unnecessary for the website.
 
 ## Your connection and IP
 
@@ -69,6 +68,6 @@ For development, run `npm ci`, install Playwright Chromium and the audio system 
 
 Audio proxy settings accept one HTTP/SOCKS5 URL or copied proxy-table row per browser. Save them while both audio browsers are closed, then open the sessions. SOCKS5 credentials are unsupported by Chromium. HTTP proxy authentication is supported. Proxied browsers disable non-proxied WebRTC UDP; the proxy and provider still need compatible audio transport. The IP button checks the live browser connection.
 
-The first audio search waits for the website load event and native authorization, then waits 1.5 seconds.
+The first audio search waits for the website load event and native authorization, then waits 1.5 seconds. Native registration and readiness now share the `nekto-audio` observer (15-second registration timeout), and Chromium uses the same background-timer flags. The browser uses private PulseAudio channels instead of the Discord bot’s silent WAV microphone, because this dashboard routes audio between two consenting sessions. These changes do not suppress website verification.
 
 The Simulator tab runs local synthetic SMS/call events only. It has no messaging backend, third-party verification endpoints, or live-send mode.

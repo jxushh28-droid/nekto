@@ -14,5 +14,5 @@ if errorlevel 1 (
   exit /b 1
 )
 start "" "http://127.0.0.1:3100/audio"
-echo Ready. You can now use the Nekto extension.
+echo Ready. Your local website is open in the browser.
 pause
