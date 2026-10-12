@@ -9,6 +9,7 @@ import {queueTextBroadcast} from './text-broadcast.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
 import {loadTokens,saveTokens} from './token-config.js';
+import { registerBomber } from './bomber.js';
 import {ProviderVideoHost} from './provider-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
