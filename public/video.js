@@ -3,6 +3,10 @@ let current=null,polling=false,restoredProvider=null;
 const names={closed:'Не подключён',ended:'Участник отключился',loading:'Загружаем…',starting:'Запускаем поиск…',login:'Нужен вход на сайте',ready:'Готов к поиску',searching:'Ищем участника…',connected:'На связи',verification:'Сайт требует проверку',attention:'Сайт ожидает ответ',error:'Подключение не удалось'};
 async function api(path,body){const res=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});if(res.status===401){$('login').hidden=false;$('videoHub').hidden=true;}const result=await res.json();if(!res.ok)throw Error(result.error||'Ошибка запроса');return result;}
 function fail(e){$('error').textContent=e.message;}
+function lockControls(){
+  for(const id of ['provider','applySessions','validateSessions','bridgeToggle'])$(id).disabled=true;
+  for(const element of document.querySelectorAll('#videoCards .start,#videoCards .close,#videoCards .nativeVideo input,#videoCards .nativeVideo button'))element.disabled=true;
+}
 function attach(i,open){if(open&&!feeds[i]){const feed=feeds[i]=new EventSource('/api/video/'+i+'/stream');feed.onmessage=e=>{if(feeds[i]!==feed)return;try{players[i].push(JSON.parse(e.data));}catch{}};feed.addEventListener('closed',()=>{feed.close();if(feeds[i]!==feed)return;feeds[i]=null;players[i].dispose();});}else if(!open&&feeds[i]){feeds[i].close();feeds[i]=null;players[i].dispose();}}
 async function screen(i){
   const slot=current?.slots[i],details=$('videoCard'+i).querySelector('.nativeVideo');if(!slot?.open||!details.open||screenPending[i]||Date.now()-screenTimes[i]<1500)return;
@@ -32,7 +36,7 @@ async function refresh(){if(polling)return;polling=true;try{
     if(!s.open){screenEpochs[i]=null;card.querySelector('.nativeImage').hidden=true;}attach(i,s.open);void screen(i);
   }
 }catch(e){if(!$('videoHub').hidden)fail(e);}finally{polling=false;}}
-async function operate(i,op,body={}){if(pending.has(i)||pending.has('setup'))return;pending.add(i);try{$('error').textContent='';await api('video/'+i+'/'+op,body);}catch(e){fail(e);}finally{pending.delete(i);await refresh();}}
+async function operate(i,op,body={}){if(pending.has(i)||pending.has('setup'))return;pending.add(i);lockControls();try{$('error').textContent='';await api('video/'+i+'/'+op,body);}catch(e){fail(e);}finally{pending.delete(i);await refresh();}}
 for(let i=0;i<2;i++){
   const card=document.createElement('article');card.id='videoCard'+i;card.className='chat';
   card.innerHTML='<div class="chatHeader"><img class="eye" src="'+(i?'/eye-b.jpg':'/eye-a.png')+'" alt=""><div><h2>Участник '+(i?'B':'A')+'</h2><div class="state">Не подключён</div></div></div><video class="videoPanel" id="video'+i+'" autoplay playsinline muted></video><div class="videoActions"><button class="sound" aria-pressed="false">Включить звук</button><button class="start connect">Поиск</button><button class="close">Отключить</button></div><p class="issue"></p><form class="compose"><label class="srOnly">Сообщение участнику '+(i?'B':'A')+'</label><textarea placeholder="Сообщение участнику '+(i?'B':'A')+'…" maxlength="1000" disabled></textarea><button type="submit" disabled>Отправить</button></form><details class="nativeVideo"><summary>Экран сайта и управление</summary><p class="videoHint">Для входа или ответа на запрос сайта откройте этот экран. Кликните поле и введите текст ниже. Проверки сайта выполняются вами.</p><img class="nativeImage" alt="Экран сайта участника '+(i?'B':'A')+'" hidden tabindex="0"><div class="nativeActions"><input class="nativeText" aria-label="Текст для выбранного поля сайта '+(i?'B':'A')+'" placeholder="Текст в выбранное поле" maxlength="2000" autocomplete="off"><button class="nativeType" type="button">Ввести</button><button class="nativeEnter" type="button">Enter</button><button class="nativeTab" type="button">Tab</button></div></details>';
@@ -49,7 +53,7 @@ for(let i=0;i<2;i++){
   card.querySelector('.nativeType').onclick=()=>{const text=card.querySelector('.nativeText').value;if(text)void input({action:'text',text});};
   card.querySelector('.nativeEnter').onclick=()=>void input({action:'key',key:'Enter'});card.querySelector('.nativeTab').onclick=()=>void input({action:'key',key:'Tab'});
 }
-async function setup(path,body){if(pending.size)return;pending.add('setup');try{$('error').textContent='';const result=await api('video/'+path,body);if(result.results)$('sessionResult').textContent=result.results.map(r=>(r.slot?'B':'A')+': '+(r.ok?'готово':r.error)).join(' · ');}catch(e){fail(e);}finally{pending.delete('setup');await refresh();}}
+async function setup(path,body){if(pending.size)return;pending.add('setup');lockControls();try{$('error').textContent='';const result=await api('video/'+path,body);if(result.results)$('sessionResult').textContent=result.results.map(r=>(r.slot?'B':'A')+': '+(r.ok?'готово':r.error)).join(' · ');}catch(e){fail(e);}finally{pending.delete('setup');await refresh();}}
 $('provider').onchange=()=>setup('provider',{provider:$('provider').value});
 $('sessionsForm').onsubmit=e=>{e.preventDefault();void setup('sessions',{sessions:[$('sessionA').value.trim(),$('sessionB').value.trim()]});};
 $('validateSessions').onclick=()=>setup('validate',{});
