@@ -250,4 +250,84 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname==='/api/audio/status'&&req.method==='GET'){await audio.loaded;return json(res,200,audio.status());}
  if(url.pathname==='/api/audio/tokens'&&req.method==='GET'){await audio.loaded;return json(res,200,{tokens:audio.tokens});}
  if(url.pathname==='/api/audio/proxies'&&req.method==='GET'){await audio.loaded;return json(res,200,{proxies:audio.proxies});}
- const
+ const audioScreen=url.pathname.match(/^\/api\/audio\/([01])\/screen$/);if(audioScreen&&req.method==='GET'){const frame=await audio.screen(Number(audioScreen[1]));if(!frame){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'no-store','X-Screen-Time':String(frame.at),'X-Screen-Epoch':frame.epoch});return res.end(frame.bytes);}
+ if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
+  if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent|proxies)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
+  const b=await body(req);try{
+   if(url.pathname==='/api/audio/proxies')return json(res,200,await audio.configureProxies(b.proxies));
+   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|reload|ip)$/);if(control){
+    const i=Number(control[1]);
+    const result=control[2]==='input'?await audio.input(i,b):control[2]==='reload'?await audio.reloadPage(i,b.epoch):control[2]==='ip'?await audio.checkIp(i,b.epoch):await audio.inspect(i);
+    return json(res,200,result);
+   }
+   if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
+   const single=url.pathname.match(/^\/api\/audio\/([01])\/token$/);if(single)return json(res,200,await audio.applySingle(Number(single[1]),b.token));
+   const check=url.pathname.match(/^\/api\/audio\/([01])\/check$/);if(check)return json(res,200,await audio.applySingle(Number(check[1]),b.token,{startCall:false}));
+   if(url.pathname==='/api/audio/connect'){await audio.consent(b.consent);return json(res,200,await audio.connectBoth());}
+   if(url.pathname==='/api/audio/consent'){await audio.consent(b.consent);return json(res,200,{ok:true});}
+   const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|next|close)$/);if(m){const i=Number(m[1]);if(m[2]!=='close')await audio.start(i,{next:m[2]==='next'});else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}
+   return json(res,404,{error:'Unknown audio operation'});
+  }catch(e){return json(res,400,{error:audio.error(e)});}
+ }
+ const audioStream=url.pathname.match(/^\/api\/audio\/([01])\/stream$/);if(audioStream&&req.method==='GET'){const i=Number(audioStream[1]);if(!audio.slots[i]||audio.slots[i].stopped)return json(res,409,{error:'Connect this audio side first.'});return audio.subscribe(i,res);}
+ if(audio.hasOpen()&&url.pathname.startsWith('/api/video/')&&req.method==='POST'&&!/\/(close|toggle)$/.test(url.pathname))return json(res,409,{error:'Close audio sessions before starting video.'});
+ if(url.pathname==='/api/video/status'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,video.status());}
+ if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{provider:video.provider,sessions:video.sessions});}
+ if(url.pathname==='/api/video/diagnostics'&&req.method==='GET')return json(res,200,await video.inspect());
+ if(['/api/video/validate','/api/video/sessions','/api/video/provider'].includes(url.pathname)&&req.method==='POST'){
+  if(video.sessionSetup||videoOps.size||video.slots.some(s=>s?.busy))return json(res,409,{error:'Video session is busy.'});
+  video.sessionSetup=true;
+  try{const b=await body(req,260000);video.sessionSetup=false;return json(res,200,url.pathname.endsWith('/provider')?await video.selectProvider(b.provider):url.pathname.endsWith('/sessions')?await video.applySessions(b.sessions):await video.validateSessions());}
+  catch(e){return json(res,400,{error:video.safeError(e)});}finally{video.sessionSetup=false;}
+ }
+ const videoScreen=url.pathname.match(/^\/api\/video\/([01])\/screen$/);
+ if(videoScreen&&req.method==='GET'){const screen=await video.screen(Number(videoScreen[1]));if(!screen){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','X-Video-Epoch':screen.epoch,'Cache-Control':'no-store'});return res.end(screen.bytes);}
+ const videoInput=url.pathname.match(/^\/api\/video\/([01])\/input$/);
+ if(videoInput&&req.method==='POST'){try{return json(res,200,await video.input(Number(videoInput[1]),await body(req)));}catch(e){return json(res,400,{error:video.safeError(e)});}}
+ if(url.pathname==='/api/video/toggle'&&req.method==='POST'){const b=await body(req);await video.toggle(!!b.enabled,!!b.consent);return json(res,200,{ok:true});}
+ if(url.pathname==='/api/video/test'&&req.method==='POST')return json(res,200,await video.test(Number(process.env.PORT||3000)));
+ const videoMatch=url.pathname.match(/^\/api\/video\/([01])\/(start|close|send|stream)$/);
+ if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i);else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){return json(res,400,{error:video.safeError(e)});}finally{videoOps.delete(i);}}
+ if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],verification:slots[i]?.verification||null,status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
+ if(url.pathname==='/api/tokens'&&req.method==='GET')return json(res,200,{tokens:configuredTokens});
+ if(url.pathname==='/api/tokens'&&req.method==='POST'){
+  if(audio.hasOpen())return json(res,409,{error:'Close audio sessions before changing text tokens.'});
+  if(tokenSetup||locks.some(Boolean)||slots.some(s=>s?.opening))return json(res,409,{error:'Wait for the current session operation to finish.'});
+  const values=validateTokens((await body(req)).tokens);tokenSetup=true;relay.toggle(false);
+  try{for(let i=0;i<2;i++){locks[i]=true;const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));relay.update(i,{connected:false,epoch:null});transcripts[i].reset(null);tokenStatus[i]=false;if(s)s.preparedToken=null;}
+   configuredTokens=await saveTokens(data,values);relay.toggle(true);const results=[];for(let i=0;i<2;i++){try{await connect(i);results.push({slot:i,ok:true,tokenImported:tokenStatus[i]});}catch(e){const error=operationError(i,e);results.push({slot:i,ok:false,error,tokenImported:tokenStatus[i]});}}
+   return json(res,200,{ok:results.every(r=>r.ok),results});
+  }finally{locks.fill(null);tokenSetup=false;}
+ }
+ if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
+ if(url.pathname==='/api/send'&&req.method==='POST'){
+  const b=await body(req);
+  if(tokenSetup||locks.some(Boolean)||slots.some(s=>!s||s.opening))return json(res,409,{error:'Wait for both chat sessions to be ready.'});
+  locks.fill(true);
+  try{
+   while(slots.some(s=>s?.busy))await new Promise(r=>setTimeout(r,50));
+   const states=await Promise.all(slots.map(s=>s.page.evaluate(()=>window.__textHost?.status())));
+   return json(res,200,queueTextBroadcast({relay,transcripts,states,text:b.text,epochs:b.epochs}));
+  }finally{locks.fill(null);}
+ }
+ if(url.pathname==='/api/diagnostics'&&req.method==='GET'){const diagnostics=await Promise.all(slots.map(async(s,i)=>({label:labels[i],open:!!s,...(s?await s.page.evaluate(textSessionDiagnostics,{expectedToken:configuredTokens[i]}):{})})));return json(res,200,{slots:diagnostics});}
+ const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send|inspect)$/);if(!match)return json(res,404,{error:'Not found'});
+ const i=Number(match[1]),operation=match[2];
+ if(req.method!=='POST')return json(res,405,{error:'POST required'});if(tokenSetup||locks[i])return json(res,409,{error:'Session is busy'});
+ locks[i]=true;try{
+  const s=slots[i];if(s)while(s.busy)await new Promise(r=>setTimeout(r,50));
+  if(operation==='inspect'){await open(i);}
+  else if(operation==='connect'){relay.members[i].error='';if(!relay.enabled)relay.toggle(true);await connect(i);}
+  else if(operation==='close'){await closeSlot(i,s);}
+  else{
+   if(!s)throw new Error('Connect this chat first.');const b=await body(req);
+   if(typeof b.text!=='string'||!b.text.trim()||b.text.length>4000)throw new Error('Write a message of 1–4000 characters.');
+   const current=await s.page.evaluate(()=>window.__textHost?.status());if(!current?.connected||b.epoch!==current.epoch)throw new Error('The conversation changed. Wait for the new chat before sending.');
+   relay.update(i,current);transcripts[i].reset(current.epoch);if(relay.members[i].queue.length>=40)throw new Error('Message queue is full. Wait before sending again.');const item=transcripts[i].add('private',b.text,'queued');relay.enqueue(i,{text:b.text,kind:'private',transcriptId:item.id});
+  }
+  return json(res,200,{ok:true});
+ }catch(e){if(operation!=='connect')operationError(i,e);throw e;}finally{locks[i]=null;}
+ }catch(e){json(res,400,{error:safeError(e)});}});
+server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
+async function shutdown(){relay.toggle(false);await audio.shutdown();await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
+process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
