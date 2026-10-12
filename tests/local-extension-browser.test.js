@@ -15,13 +15,17 @@ test('password-free pages initialise and switch modes in Chromium',async()=>{
  }finally{await browser?.close();await f.stop();}
 });
 
-test('MV3 service worker loads and opens setup when the local helper is not running',async()=>{
+test('MV3 service worker opens the local dashboard and shows setup after the helper stops',async()=>{
+ const f=await localFixture(3100);
  const path=fileURLToPath(new URL('../extension',import.meta.url));
- const context=await chromium.launchPersistentContext('',{channel:'chromium',headless:true,args:['--disable-extensions-except='+path,'--load-extension='+path]});
+ let context;
  try{
+  context=await chromium.launchPersistentContext('',{channel:'chromium',headless:true,args:['--disable-extensions-except='+path,'--load-extension='+path]});
   const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');
-  const opened=context.waitForEvent('page');
-  await worker.evaluate(async()=>{const {openDashboard}=await import(chrome.runtime.getURL('background.js'));await openDashboard();});
-  const page=await opened;await page.waitForURL(/chrome-extension:\/\/.*\/setup.html/);await page.locator('h1').waitFor();assert.equal(await page.locator('h1').textContent(),'Start your local dashboard');
- }finally{await context.close();}
+  const [dashboard]=await Promise.all([context.waitForEvent('page'),worker.evaluate(()=>openDashboard())]);
+  await dashboard.waitForURL('http://127.0.0.1:3100/audio');await dashboard.locator('#hub').waitFor({state:'visible'});assert.equal(await dashboard.locator('#password').count(),0);
+  await f.stop();
+  const [setup]=await Promise.all([context.waitForEvent('page'),worker.evaluate(()=>openDashboard())]);
+  await setup.waitForURL(/chrome-extension:\/\/.*\/setup.html/);await setup.locator('h1').waitFor();assert.equal(await setup.locator('h1').textContent(),'Start your local dashboard');
+ }finally{await context?.close();await f.stop();}
 });

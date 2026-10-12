@@ -4,9 +4,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:net';
 
-export async function localFixture(){
+export async function localFixture(requestedPort=0){
  const directory=await mkdtemp(join(tmpdir(),'nekto-local-'));
- const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));
+ const probe=createServer();await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(requestedPort,'127.0.0.1',resolve);});
  const port=probe.address().port;await new Promise(r=>probe.close(r));
  const child=spawn(process.execPath,['server.js'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),LOCAL_DASHBOARD_PORT:String(port),LOCAL_EXTENSION_MODE:'1',DASHBOARD_PASSWORD:'',TEXT_DATA_DIR:directory},stdio:['ignore','ignore','pipe']});
  let errors='';child.stderr.on('data',b=>errors+=b);
