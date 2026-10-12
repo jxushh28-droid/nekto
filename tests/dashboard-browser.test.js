@@ -29,19 +29,33 @@ test('audio proxy fields restore saved settings, accept a list row, and lock whi
   status.slots[0].closable=true;await page.waitForFunction(()=>document.getElementById('saveProxies').disabled);
  }finally{await browser.close();}
 });
-test('simulator browser runs a local scenario without sending messages or external requests',async()=>{
+test('simulator browser dispatches a job and renders polled events',async()=>{
  const browser=await chromium.launch({headless:true});
  try{
-  const context=await browser.newContext(),apiCalls=[],external=[];
+  const context=await browser.newContext(),external=[];const jobId='job1';let polls=0;
   await context.route('**/*',async route=>{
-   const url=new URL(route.request().url());if(url.origin!==base){external.push(url.href);return route.abort();}
-   if(url.pathname.startsWith('/api/')){apiCalls.push(url.pathname);return route.fulfill({json:{enabled:false,slots:[]}});}
+   const url=new URL(route.request().url());
+   if(url.origin!==base){external.push(url.href);return route.abort();}
+   if(url.pathname==='/api/status')return route.fulfill({json:{ok:true}});
+   if(url.pathname==='/api/dispatch')return route.fulfill({json:{id:jobId,phone:'+77780000000',total:2}});
+   if(url.pathname==='/api/job/'+jobId){
+    polls++;
+    const done=polls>=2;
+    return route.fulfill({json:{id:jobId,phone:'+77780000000',total:2,sent:done?2:1,failed:0,done,elapsed:done?2:1,events:done?[{seq:1,channel:'sms',name:'myfishing',status:'sent',http:200,error:null},{seq:2,channel:'call',name:'partsstart',status:'sent',http:200,error:null}]:[{seq:1,channel:'sms',name:'myfishing',status:'sent',http:200,error:null}]}});
+   }
+   if(url.pathname.startsWith('/api/'))return route.fulfill({json:{}});
    const file=url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);
    return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
   });
-  const page=await context.newPage();await page.goto(base+'/simulator');await page.locator('#simulationPhone').fill('+7 700 000 00 00');await page.locator('#simulationCount').fill('2');await page.locator('#simulationChannel').selectOption('both');await page.locator('#simulationStart').click();
+  const page=await context.newPage();
+  await page.goto(base+'/simulator');
+  await page.locator('#simulationPhone').fill('+7 700 000 00 00');
+  await page.locator('#simulationCount').fill('2');
+  await page.locator('#simulationChannel').selectOption('both');
+  await page.locator('#simulationStart').click();
   await page.waitForFunction(()=>document.querySelectorAll('#simulationLog li').length===2);
-  assert.match(await page.locator('#simulationSummary').textContent(),/Отправлено SMS и звонков: 0/);assert.deepEqual(apiCalls,['/api/status']);assert.deepEqual(external,[]);
+  assert.match(await page.locator('#simulationSummary').textContent(),/отправлено: 2 \/ 2/);
+  assert.deepEqual(external,[]);
  }finally{await browser.close();}
 });
 test('audio IP button checks only its current browser and renders the returned address',async()=>{
@@ -96,7 +110,6 @@ test('audio token exists before the first page script and settings survive reloa
  const browser=await chromium.launch({headless:true});try{
   const context=await browser.newContext({storageState:voiceStorageState('old',{cookies:[],origins:[{origin:'https://nekto-me.kz',localStorage:[{name:'storage_audio_v2',value:JSON.stringify({user:{authToken:'old',volume:37},chat:{lastStartDialogTime:123}})}]}]})});
   await context.addInitScript(primeVoiceStorage,'fixture-token');
-  // All requests are fulfilled locally; no Nekto traffic or real call is made.
   await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<script>window.firstScriptStorage=JSON.parse(localStorage.getItem("storage_audio_v2"));</script>'}));
   const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
   for(let n=0;n<2;n++){
@@ -136,7 +149,6 @@ for(const mode of ['text','audio'])test(mode+' tokens remain visible after faile
  const page=await context.newPage();await page.goto(base+(mode==='audio'?'/audio':'/'));if(mode==='audio')await openAudioTools(page);await page.waitForFunction(()=>document.querySelector('#tokenA').value.length===64);assert.equal(await page.locator('#tokenA').inputValue(),saved[0]);const replacement=['c'.repeat(64),'d'.repeat(64)];await page.locator('#tokenA').fill(replacement[0]);await page.locator('#tokenB').fill(replacement[1]);await page.locator(mode==='audio'?'#applyBoth':'#applyTokens').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('Fixture verification'));assert.equal(await page.locator('#tokenA').inputValue(),replacement[0]);assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);await page.reload();await page.waitForFunction(()=>document.querySelector('#tokenA').value.startsWith('cccc'));assert.equal(await page.locator('#tokenB').inputValue(),replacement[1]);if(mode==='audio'){const meter=page.getByRole('meter',{name:'Уровень звука A'});assert.equal(await meter.getAttribute('aria-valuenow'),'70');assert.equal(await page.locator('#card0 .meterValue').textContent(),'-18 dBFS');assert.equal(await page.getByRole('meter',{name:'Уровень звука B'}).getAttribute('aria-valuenow'),'0');}
  }finally{await browser.close();}
 });
-
 test('single-side audio test accepts one token, never submits B, and retains A after failure and reload',async()=>{
  const browser=await chromium.launch({headless:true});try{
   const context=await browser.newContext();let saved=[null,null];const submissions=[];
@@ -183,17 +195,14 @@ test('card Connect applies the token typed in the field, and reconnects with the
    await route.fulfill({body,contentType:type});
   });
   const page=await context.newPage();await page.goto(base+'/audio');await openAudioTools(page);await page.waitForFunction(()=>!document.querySelector('#hub').hidden);
-  // Field holds a token for side A: pressing Connect must apply exactly that token.
   await page.locator('#tokenA').fill('typed-connect-token');
   await page.locator('#card0 .connect').click();await page.waitForFunction(()=>document.querySelector('#tokenResult').textContent.includes('поиск запущен'));
   assert.deepEqual(submissions,[{path:'/api/audio/0/token',data:{token:'typed-connect-token'}}]);
-  // Side B field is empty: Connect reconnects with the saved token, sending no credential.
   assert.equal(await page.locator('#tokenB').inputValue(),'');
   await page.locator('#card1 .connect').click();await page.waitForFunction(()=>/\bB:/.test(document.querySelector('#tokenResult').textContent));
   assert.deepEqual(submissions[1],{path:'/api/audio/1/start',data:{}});assert.equal(submissions.length,2);
  }finally{await browser.close();}
 });
-
 test('audio panel shows the native screen and keeps the final failure image visible',async()=>{
  const browser=await chromium.launch({headless:true});try{
   const context=await browser.newContext();const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGMwWhAPAAI5ATKtB7p3AAAAAElFTkSuQmCC','base64');let stopped=false,requests=0;
@@ -212,7 +221,6 @@ test('audio panel shows the native screen and keeps the final failure image visi
   assert.equal(await page.locator('#card0 .screenImage').isVisible(),true);assert.ok(requests>=2);
  }finally{await browser.close();}
 });
-
 test('audio browser tools send normalized clicks, text and keys only for the displayed session',async()=>{
  const browser=await chromium.launch({headless:true});try{
   const context=await browser.newContext(),submissions=[];
