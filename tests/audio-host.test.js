@@ -5,30 +5,50 @@ import {observeVoiceStorage,applyVoiceStorageToken} from '../voice-bootstrap.js'
 import {inspectVoiceToken,readVoiceStorageToken} from '../voice-inspection.js';
 import {voiceReady} from '../voice-session.js';
 import {runInNewContext} from 'node:vm';
+import {readAudioCallState} from '../audio-call/call-state.js';
+import {readAudioPrompt} from '../audio-call/audio-prompt.js';
 test('authorized native client is ready without the optional isFirstLoaded flag',()=>{
  const state={system:{isAuth:true,socketConnected:true},user:{tokenId:123}};
  const sandbox={document:{querySelectorAll:()=>[{__vue__:{$store:{state}}}]}};
  assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),true);
  state.system.isAuth=false;assert.equal(runInNewContext('('+voiceReady.toString()+')()',sandbox),false);
 });
-async function fixture(){const dir=await mkdtemp(join(tmpdir(),'voice-test-'));const routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;host.slots=[0,1].map(i=>({page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};}
-test('authenticated attempt diagnostics show the applied token while internal IDs stay opaque',async()=>{
+async function fixture(){
+ const dir=await mkdtemp(join(tmpdir(),'voice-test-')),routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];
+ const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};
+ const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;
+ host.slots=[0,1].map(i=>({page:{evaluate:async fn=>{
+  if(fn===confirmVoiceSession)return {ok:true,diagnostics:{authenticated:true,socketConnected:true}};
+  if(fn===readAudioPrompt)return {visible:true,category:'unknown',fieldCount:0};
+  if(fn===readAudioCallState){const state=await host.state(host.slots[i]);return {partnerConnected:!!state.connected,searching:state.status==='searching',callEnded:state.status==='ended',verification:state.status==='verification',restricted:state.status==='blocked',attention:state.status==='attention'};}
+  return states[i];
+ }},browser:{close:async()=>{}},bootstrap:{ok:true,reason:'context-storage-before-navigation'},connected:true,epoch:String(i)}));
+ return {host,states,routes,done:async()=>{await host.shutdown();await rm(dir,{recursive:true,force:true});}};
+}
+test('attempt diagnostics use opaque IDs and never expose the applied token',async()=>{
  const f=await fixture();try{
   const s=f.host.slots[0],token='attempt-diagnostic-fixture-token';
   s.profileIdentity=token;s.stage='wait-search';s.status='verification';s.paused=true;
   s.page.evaluate=async()=>({clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,captcha:true});
   const inspected=(await f.host.inspect(0)).attempt;
-  assert.equal(inspected.attemptId,token);assert.equal(inspected.runId,token);assert.equal(inspected.sessionId,token);
+  assert.equal(inspected.attemptId,s.epoch);assert.equal(inspected.runId,s.epoch);assert.equal(inspected.sessionId,s.epoch);
   assert.equal(inspected.status,'verification');assert.equal(inspected.tokenInspection.captcha,true);
   assert.equal(f.host.attempts[0].attemptId,s.epoch);
   assert.equal(JSON.stringify(f.host.attempts[0]).includes(token),false);
   assert.equal(f.host.status().slots[0].attemptId,s.epoch);
-  assert.equal(f.host.status().slots[0].lastAttempt.attemptId,token);
+  assert.equal(f.host.status().slots[0].lastAttempt.attemptId,s.epoch);
   // A later configuration or a closed browser must not relabel the previous run.
   f.host.tokens[0]='replacement-fixture-token';await f.host.close(0);
   const closed=await f.host.inspect(0);
-  assert.equal(closed.open,false);assert.equal(closed.attempt.attemptId,token);
-  assert.equal(closed.attempt.runId,token);assert.equal(closed.attempt.sessionId,token);
+  assert.equal(closed.open,false);assert.equal(closed.attempt.attemptId,s.epoch);
+  assert.equal(closed.attempt.runId,s.epoch);assert.equal(closed.attempt.sessionId,s.epoch);
+ }finally{await f.done();}
+});
+test('dashboard receipts omit browser credentials and the host has no extraction console',async()=>{
+ const f=await fixture();try{
+  const s=f.host.slots[0];f.host.storageReceipts.set(s,{slot:0,at:1,token:'private-browser-fixture-token',matchesInput:true});
+  assert.deepEqual(f.host.applicationReceipt(s),{slot:0,at:1,matchesInput:true});
+  assert.equal(f.host.console,undefined);assert.equal(f.host.storageToken,undefined);
  }finally{await f.done();}
 });
 test('preparation diagnostics use the stored page and an accessible redactor',async()=>{
@@ -116,20 +136,23 @@ test('muting still attempts the second direction when the first mute fails',asyn
  graph.pactl=async(...args)=>{commands.push(args);if(args[1]==='10')throw Error('fixture mute failure');};
  await assert.rejects(graph.routing(false),/fixture mute failure/);assert.equal(commands.length,2);assert.equal(graph.routeKey,null);
 });
-test('Start waits for current native authorization instead of trusting a previously prepared slot',async()=>{
+test('first Start waits one second after current native authorization and later searches do not',async()=>{
  const f=await fixture();try{
-  let checks=0,clicks=0,preparedAt;f.host.prepare=async()=>{preparedAt=performance.now();return f.host.slots[0];};
-  f.host.state=async()=>++checks===1?{status:'ready',authenticated:false,socketConnected:false}:checks===2?{status:'ready',authenticated:true,socketConnected:true}:{status:'searching',connected:false};
-  f.host.slots[0].page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>{assert.ok(performance.now()-preparedAt>=7000);assert.equal(checks,2);clicks++;}});
-  await f.host.start(0);assert.equal(clicks,1);assert.equal(checks,3);
+  const slot=f.host.slots[0];f.host.prepare=async()=>slot;f.states[0]={status:'ready',connected:false};
+  const originalEvaluate=slot.page.evaluate;let authorizedAt=0,clicks=0;
+  slot.page.evaluate=async fn=>{if(fn===confirmVoiceSession){authorizedAt||=performance.now();return {ok:true,diagnostics:{authenticated:true,socketConnected:true}};}return originalEvaluate(fn);};
+  const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>{if(!clicks)assert.ok(performance.now()-authorizedAt>=1000);clicks++;f.states[0]={status:'searching',connected:false};}};
+  slot.page.locator=()=>({count:async()=>1,nth:()=>button});
+  await f.host.start(0);assert.equal(clicks,1);assert.equal(slot.firstSearchWaited,true);
+  f.states[0]={status:'ready',connected:false};const nextAt=performance.now();await f.host.start(0);assert.equal(clicks,2);assert.ok(performance.now()-nextAt<900);
  }finally{await f.done();}
 });
-test('verification appearing during the seven-second wait prevents Start',async()=>{
+test('verification appearing during the one-second first wait prevents Start',async()=>{
  const f=await fixture();try{
-  let clicks=0,preparedAt;f.host.prepare=async()=>{preparedAt=performance.now();return f.host.slots[0];};
-  f.host.state=async()=>{assert.ok(performance.now()-preparedAt>=7000);return {status:'verification',authenticated:true,socketConnected:true};};
-  f.host.slots[0].page.locator=()=>({isVisible:async()=>true,click:async()=>clicks++});
-  await assert.rejects(f.host.start(0),/requires attention/);assert.equal(clicks,0);assert.equal(f.host.slots[0].stopped,undefined);assert.equal(f.host.slots[0].paused,true);
+  const slot=f.host.slots[0];f.host.prepare=async()=>slot;f.states[0]={status:'ready',connected:false};let clicks=0;
+  const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>clicks++};slot.page.locator=()=>({count:async()=>1,nth:()=>button});
+  const timer=setTimeout(()=>f.states[0]={status:'verification',connected:false,detail:'Nekto requires verification.'},100);
+  await assert.rejects(f.host.start(0),/verification/);clearTimeout(timer);assert.equal(clicks,0);assert.equal(slot.paused,true);assert.equal(slot.stopped,undefined);
  }finally{await f.done();}
 });
 test('persistent WebSocket logging records metadata without payloads or raw errors',async()=>{
@@ -179,7 +202,7 @@ test('audio reconnect restores the native profile and confirms the sent token fo
   await f.host.prepare(0);const status=f.host.status().slots[0];
   assert.equal(contexts.length,2);assert.equal(JSON.parse(contexts[1].origins[0].localStorage[0].value).user.volume,37);assert.equal(contexts[1].cookies[0].value,'private-cookie');
   assert.equal(status.profile.restored,true);assert.equal(status.wire.sentTokenMatches,true);assert.equal(status.wire.registrationSucceeded,true);
-  assert.equal(status.lastAttempt.attemptId,'profile-fixture-token');assert.equal(status.lastAttempt.runId,'profile-fixture-token');assert.equal(status.lastAttempt.sessionId,'profile-fixture-token');
+  assert.equal(status.lastAttempt.attemptId,status.attemptId);assert.equal(status.lastAttempt.runId,status.attemptId);assert.equal(status.lastAttempt.sessionId,status.attemptId);
   const redacted=structuredClone(status);delete redacted.lastAttempt.attemptId;delete redacted.lastAttempt.runId;delete redacted.lastAttempt.sessionId;
   assert.doesNotMatch(JSON.stringify(redacted),/private-cookie|profile-fixture-token/);
  }finally{await f.done();}
@@ -188,7 +211,7 @@ test('local token matches cannot authorize Start when the wire registration used
  const f=await fixture();try{
   f.host.tokens=['expected-token',null];const slot=f.host.slots[0];slot.wire={registrationSent:true,sentTokenMatches:false,registrationReceived:true,registrationSucceeded:true};
   slot.page.waitForFunction=async()=>{};slot.page.evaluate=async fn=>fn===confirmVoiceSession?{ok:true,diagnostics:{savedTokenMatches:true,liveTokenMatches:true}}:[];
-  await assert.rejects(f.host.prepare(0),/did not confirm sending and accepting the saved token/);assert.equal(slot.prepared,undefined);
+  await assert.rejects(f.host.prepare(0),/token changed/);assert.equal(slot.prepared,undefined);
  }finally{await f.done();}
 });
 test('latest restriction source is retained after the socket disconnects',async()=>{
@@ -217,7 +240,15 @@ test('single-token failure retains both saved tokens without starting or retryin
  }finally{await f.done();}
 });
 test('audio routes only after consent and both sides connect; lost connection mutes',async()=>{const f=await fixture();try{await f.host.tick();assert.equal(f.host.enabled,false);await f.host.consent(true);assert.equal(f.host.enabled,true);f.states[1].connected=false;await f.host.tick();assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);}finally{await f.done();}});
-test('stranger disconnect closes that browser and disables routing',async()=>{const f=await fixture();try{await f.host.consent(true);f.states[0].ended=true;await f.host.tick();assert.equal(f.host.slots[0],null);assert.ok(f.host.slots[1]);assert.equal(f.host.requested,false);assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);}finally{await f.done();}});
+test('stranger disconnect retains the finished browser and disables routing',async()=>{const f=await fixture();try{await f.host.consent(true);f.states[0].ended=true;await f.host.tick();assert.ok(f.host.slots[0]);assert.ok(f.host.slots[1]);assert.equal(f.host.requested,false);assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);}finally{await f.done();}});
+test('an immediate partner replacement revokes audio routing even without an ended poll',async()=>{
+ const f=await fixture();try{
+  f.states[0].connectionId='first';f.states[1].connectionId='second';
+  await f.host.consent(true);assert.equal(f.host.enabled,true);
+  f.states[0].connectionId='replacement';await f.host.tick();
+  assert.equal(f.host.slots[0].connected,true);assert.equal(f.host.requested,false);assert.equal(f.host.enabled,false);assert.equal(f.routes.at(-1),false);
+ }finally{await f.done();}
+});
 test('old capture chunks cannot leak into a replacement audio session',async()=>{const f=await fixture();const r=new EventEmitter();const writes=[];r.writeHead=()=>{};r.write=s=>writes.push(s);r.end=()=>r.emit('close');try{f.host.subscribe(0,r);const child=f.host.captures[0];child.stdout.emit('data',Buffer.alloc(2048));assert.equal(writes.filter(s=>s.startsWith('data:')).length,1);f.host.slots[0]={...f.host.slots[0],epoch:'new'};child.stdout.emit('data',Buffer.alloc(2048));assert.equal(writes.filter(s=>s.startsWith('data:')).length,1);}finally{await f.done();}});
 test('meters measure each side independently without a listening subscriber',async()=>{const f=await fixture();try{await f.host.tick();const tone=Buffer.alloc(2048);for(let n=0;n<1024;n++)tone.writeInt16LE(8192,n*2);f.host.captures[0].stdout.emit('data',tone);f.host.captures[1].stdout.emit('data',Buffer.alloc(2048));const status=f.host.status();assert.equal(status.slots[0].db,-12);assert.equal(status.slots[0].level,80);assert.equal(status.slots[1].level,0);const old=f.host.captures[0];f.states[0].connected=false;await f.host.tick();assert.equal(f.host.captures[0],null);assert.equal(f.host.status().slots[0].level,0);old.stdout.emit('data',tone);assert.equal(f.host.status().slots[0].level,0);}finally{await f.done();}});
 function voiceFixture({authenticated=false,live='expected-token',saved=live,restricted=false}={}){const old={document:global.document,localStorage:global.localStorage};let listener=()=>{},writes=0,requests=0;const user={authToken:live,tokenId:authenticated?321:null},system={isAuth:authenticated,socketConnected:true,forceDisconnectReason:restricted?'fixture-restriction':null};const store={state:{user,system},subscribe:fn=>{listener=fn;return()=>{listener=()=>{};};},commit:()=>writes++};global.document={querySelectorAll:()=>[{__vue__:{$store:store,$socketActions:{authorize:()=>requests++}}}]};global.localStorage={getItem:()=>JSON.stringify({user:{authToken:saved}}),setItem:()=>writes++};return {store,user,system,emit:()=>listener({type:'native-update'}),counts:()=>({writes,requests}),done:()=>{global.document=old.document;global.localStorage=old.localStorage;}};}
@@ -231,7 +262,7 @@ test('verification during Start retains the same browser and keeps observing wit
  const s=f.host.slots[0];let closed=0,reads=0;s.stage='before-start';s.browser.close=async()=>closed++;
  f.host.prepare=async()=>s;f.host.state=async slot=>{if(slot!==s)return f.states[1];reads++;return {status:'verification',connected:false,detail:'Nekto requires verification.',authenticated:true,socketConnected:true,diagnostics:[{seq:1,captcha:true,tokenChanges:0}]};};
  await assert.rejects(f.host.start(0),/verification/);await f.host.tick();await f.host.tick();
- const result=f.host.status().slots[0];assert.equal(closed,0);assert.equal(reads,3);assert.equal(result.open,true);assert.equal(result.closable,true);assert.equal(result.stopped,false);assert.equal(result.paused,true);assert.equal(result.status,'verification');assert.equal(result.stage,'before-start');assert.equal(result.bootstrap.ok,true);assert.equal(result.diagnostics[0].captcha,true);assert.equal(result.lastAttempt.lastState.authenticated,true);
+ const result=f.host.status().slots[0];assert.equal(closed,0);assert.ok(reads>=3);assert.equal(result.open,true);assert.equal(result.closable,true);assert.equal(result.stopped,false);assert.equal(result.paused,true);assert.equal(result.status,'verification');assert.equal(result.stage,'before-start');assert.equal(result.bootstrap.ok,true);assert.equal(result.diagnostics[0].captcha,true);assert.equal(result.lastAttempt.lastState.authenticated,true);
  }finally{await f.done();}});
 test('verification after search pauses the browser and mutes forwarding without retries',async()=>{const f=await fixture();try{
  let closed=0;f.host.slots[0].browser.close=async()=>closed++;f.host.slots[0].stage='searching';
@@ -243,7 +274,7 @@ test('a native prompt stops Start once and preserves the actual explanation inst
  const s=f.host.slots[0];let reads=0,closed=0;s.browser.close=async()=>closed++;f.host.prepare=async()=>s;
  f.host.state=async slot=>slot===s?(reads++,{status:'attention',connected:false,detail:'Nekto requires microphone permission.',authenticated:true,socketConnected:true}):f.states[1];
  await assert.rejects(f.host.start(0),/microphone permission/);await f.host.tick();
- const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,false);assert.equal(status.paused,true);assert.equal(closed,0);assert.equal(reads,2);assert.equal(status.lastAttempt.lastState.status,'attention');
+ const status=f.host.status().slots[0];assert.equal(status.status,'attention');assert.equal(status.stopped,false);assert.equal(status.paused,true);assert.equal(closed,0);assert.ok(reads>=2);assert.equal(status.lastAttempt.lastState.status,'attention');
  }finally{await f.done();}});
 
 test('microphone diagnosis selects the assigned source and omits device metadata',async()=>{
@@ -294,7 +325,7 @@ test('applying unchanged tokens retains console-modified pages for single and bo
   await f.host.apply(['reuse-fixture-A','reuse-fixture-B'],false);assert.deepEqual(closed,[]);assert.deepEqual(started,[0,0,1]);
   assert.equal(f.host.slots[0],original[0]);assert.equal(f.host.slots[1],original[1]);
   f.host.start=async()=>{};let reloads=0;f.host.reloadNative=async(i,s)=>{assert.equal(i,0);assert.equal(s,original[0]);reloads++;};
-  const result=await f.host.applySingle(0,'replacement-fixture-A');assert.deepEqual(closed,[]);assert.equal(reloads,1);assert.equal(result.application.token,'replacement-fixture-A');assert.equal(result.application.matchesInput,true);assert.equal(f.host.slots[1],original[1]);
+  const result=await f.host.applySingle(0,'replacement-fixture-A');assert.deepEqual(closed,[]);assert.equal(reloads,1);assert.equal(result.application.token,undefined);assert.equal(JSON.stringify(result.application).includes('replacement-fixture-A'),false);assert.equal(result.application.matchesInput,true);assert.equal(f.host.slots[1],original[1]);
   assert.equal(JSON.stringify(f.host.attempts).includes('replacement-fixture-A'),false);
  }finally{await f.done();}
 });

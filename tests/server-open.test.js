@@ -30,7 +30,11 @@ test('audio screen endpoint requires panel authentication and returns no image f
   const input=await fetch(base+'/api/audio/0/input',{method:'POST',headers:inputHeaders,body:JSON.stringify({epoch:'fixture',action:'key',key:'Enter'})});assert.equal(input.status,400);assert.match((await input.json()).error,/browser is closed/);
   assert.equal((await fetch(base+'/api/audio/0/input',{method:'POST',headers:{...inputHeaders,Origin:'https://other.test'},body:'{}'})).status,403);
   const inspect=await fetch(base+'/api/audio/0/inspect',{method:'POST',headers:inputHeaders,body:'{}'});assert.equal(inspect.status,200);assert.deepEqual(await inspect.json(),{open:false,attempt:null});
-  const invalidGender=await fetch(base+'/api/video/0/start',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({selfGender:'invalid'})});assert.equal(invalidGender.status,400);assert.match((await invalidGender.json()).error,/valid gender/);
+  const invalidProvider=await fetch(base+'/api/video/provider',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({provider:'yap'})});assert.equal(invalidProvider.status,400);assert.match((await invalidProvider.json()).error,/Umingle or Chatruletka/);
+  const providers=await (await fetch(base+'/api/video/status',{headers:{Cookie:cookie}})).json();assert.deepEqual(providers.providers.map(p=>p.id),['umingle','chatruletka']);
+  assert.equal((await fetch(base+'/api/send',{method:'POST',headers:inputHeaders,body:JSON.stringify({text:'hello',epochs:['a','b']})})).status,409);
+  assert.equal((await fetch(base+'/api/video/0/screen',{headers:{Cookie:cookie}})).status,204);
+  const eye=await fetch(base+'/eye-a.png');assert.equal(eye.headers.get('content-type'),'image/png');assert.equal((await eye.arrayBuffer()).byteLength>1000,true);
  }finally{
   const exited=new Promise(r=>child.once('exit',r));child.kill('SIGTERM');await exited;await rm(temporary,{recursive:true,force:true});
  }

@@ -2,8 +2,10 @@ FROM mcr.microsoft.com/playwright:v1.58.2-noble
 RUN apt-get update && apt-get install -y --no-install-recommends pulseaudio pulseaudio-utils ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm ci
 COPY . .
-RUN node --check server.js && node --check video-host.js && node --check yap-video-host.js && node --test tests/native-console.test.js tests/browser-profile.test.js tests/voice-wire.test.js tests/video-host.test.js tests/yap-video-host.test.js tests/video-session-config.test.js tests/video-frame-browser.test.js tests/audio-host.test.js tests/audio-native-controls.test.js tests/audio-native-browser.test.js tests/audio-runtime.test.js tests/audio-devices.test.js tests/server-open.test.js tests/dashboard-browser.test.js tests/voice-bootstrap.test.js tests/voice-extension-browser.test.js
+ARG SCREENSHOT_DIR
+ENV SCREENSHOT_DIR=$SCREENSHOT_DIR
+RUN node --check server.js && node --check provider-video-host.js && node --check audio-host.js && node --test --test-concurrency=2 && npm prune --omit=dev
 ENV NODE_ENV=production
 CMD ["node", "server.js"]

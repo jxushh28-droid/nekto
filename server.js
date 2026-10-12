@@ -5,10 +5,11 @@ import {chromium} from 'playwright';
 import {Relay,labels} from './relay.js';
 import {withToken,validateTokens} from './session.js';
 import {Transcript} from './transcript.js';
+import {queueTextBroadcast} from './text-broadcast.js';
 import {startConversation} from './connection.js';
 import {prepareTextSession} from './prepare-session.js';
 import {loadTokens,saveTokens} from './token-config.js';
-import {YapVideoHost} from './yap-video-host.js';
+import {ProviderVideoHost} from './provider-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
@@ -22,7 +23,7 @@ const safeError=e=>{let text=String(e?.message||e);for(const token of configured
 const data=process.env.TEXT_DATA_DIR||'/data/text-host';await mkdir(data,{recursive:true});configuredTokens=await loadTokens(data);
 let browser=null,launching=null,videoBrowser=null,videoLaunching=null;
 async function getVideoBrowser(){if(videoBrowser?.isConnected())return videoBrowser;if(!videoLaunching)videoLaunching=chromium.launch({headless:true,args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required','--use-fake-device-for-media-stream','--js-flags=--max-old-space-size=128']}).then(b=>{videoBrowser=b;return b;}).finally(()=>videoLaunching=null);return videoLaunching;}
-const video=new YapVideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
+const video=new ProviderVideoHost({getBrowser:getVideoBrowser,data}),videoOps=new Set();
 const audio=new AudioHost({data});
 const injection=await readFile(new URL('./browser/adapter.js',import.meta.url),'utf8')+'\n'+await readFile(new URL('./browser/runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/chat/';
@@ -77,9 +78,9 @@ const failures=new Map();
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
  if(url.pathname==='/health')return json(res,200,{ok:true,service:'nekto-text-host'});
- if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css'].includes(url.pathname)){
+ if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css','/eye-a.png','/eye-b.jpg'].includes(url.pathname)){
   if(url.pathname==='/video-fixture'){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><body>Generated media test</body>');}
-  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
+  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.png')?'image/png':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');if(/\.(png|jpg)$/.test(name))res.setHeader('Cache-Control','public, max-age=86400');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
  if(req.method==='POST'){
   const origin=req.headers.origin;if(origin&&origin!== 'https://'+req.headers.host&&origin!=='http://'+req.headers.host)return json(res,403,{error:'Invalid origin'});
  }
@@ -95,10 +96,9 @@ const server=http.createServer(async(req,res)=>{try{
  if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
   if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
-   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|storage|reload|console)$/);if(control){
+   const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|reload)$/);if(control){
     const i=Number(control[1]);
-    const result=control[2]==='input'?await audio.input(i,b):control[2]==='storage'?await audio.storageToken(i,b.epoch):control[2]==='reload'?await audio.reloadPage(i,b.epoch):control[2]==='console'?await audio.console(i,b):await audio.inspect(i);
-    if(['storage','console'].includes(control[2])&&result.browserEpoch)res.setHeader('X-Audio-Epoch',result.browserEpoch);
+    const result=control[2]==='input'?await audio.input(i,b):control[2]==='reload'?await audio.reloadPage(i,b.epoch):await audio.inspect(i);
     return json(res,200,result);
    }
    if(url.pathname==='/api/audio/tokens')return json(res,200,await audio.apply(b.tokens,b.consent));
@@ -106,20 +106,29 @@ const server=http.createServer(async(req,res)=>{try{
    const check=url.pathname.match(/^\/api\/audio\/([01])\/check$/);if(check)return json(res,200,await audio.applySingle(Number(check[1]),b.token,{startCall:false}));
    if(url.pathname==='/api/audio/connect'){await audio.consent(b.consent);return json(res,200,await audio.connectBoth());}
    if(url.pathname==='/api/audio/consent'){await audio.consent(b.consent);return json(res,200,{ok:true});}
-   const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|close)$/);if(m){const i=Number(m[1]);if(m[2]==='start')await audio.start(i);else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}
+   const m=url.pathname.match(/^\/api\/audio\/([01])\/(start|next|close)$/);if(m){const i=Number(m[1]);if(m[2]!=='close')await audio.start(i,{next:m[2]==='next'});else{if(audio.ops.has(i)||audio.setup)throw Error('Audio session is busy.');await audio.close(i);}return json(res,200,{ok:true});}
    return json(res,404,{error:'Unknown audio operation'});
   }catch(e){return json(res,400,{error:audio.error(e)});}
  }
  const audioStream=url.pathname.match(/^\/api\/audio\/([01])\/stream$/);if(audioStream&&req.method==='GET'){const i=Number(audioStream[1]);if(!audio.slots[i]||audio.slots[i].stopped)return json(res,409,{error:'Connect this audio side first.'});return audio.subscribe(i,res);}
  if(audio.hasOpen()&&url.pathname.startsWith('/api/video/')&&req.method==='POST'&&!/\/(close|toggle)$/.test(url.pathname))return json(res,409,{error:'Close audio sessions before starting video.'});
- if(url.pathname==='/api/video/status'&&req.method==='GET')return json(res,200,video.status());
- if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{sessions:video.sessions});}
+ if(url.pathname==='/api/video/status'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,video.status());}
+ if(url.pathname==='/api/video/sessions'&&req.method==='GET'){await video.sessionsLoaded;return json(res,200,{provider:video.provider,sessions:video.sessions});}
  if(url.pathname==='/api/video/diagnostics'&&req.method==='GET')return json(res,200,await video.inspect());
- if(['/api/video/validate','/api/video/sessions'].includes(url.pathname)&&req.method==='POST')return json(res,400,{error:'Yap video does not require imported session tokens.'});
+ if(['/api/video/validate','/api/video/sessions','/api/video/provider'].includes(url.pathname)&&req.method==='POST'){
+  if(video.sessionSetup||videoOps.size||video.slots.some(s=>s?.busy))return json(res,409,{error:'Video session is busy.'});
+  video.sessionSetup=true;
+  try{const b=await body(req,260000);video.sessionSetup=false;return json(res,200,url.pathname.endsWith('/provider')?await video.selectProvider(b.provider):url.pathname.endsWith('/sessions')?await video.applySessions(b.sessions):await video.validateSessions());}
+  catch(e){return json(res,400,{error:video.safeError(e)});}finally{video.sessionSetup=false;}
+ }
+ const videoScreen=url.pathname.match(/^\/api\/video\/([01])\/screen$/);
+ if(videoScreen&&req.method==='GET'){const screen=await video.screen(Number(videoScreen[1]));if(!screen){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','X-Video-Epoch':screen.epoch,'Cache-Control':'no-store'});return res.end(screen.bytes);}
+ const videoInput=url.pathname.match(/^\/api\/video\/([01])\/input$/);
+ if(videoInput&&req.method==='POST'){try{return json(res,200,await video.input(Number(videoInput[1]),await body(req)));}catch(e){return json(res,400,{error:video.safeError(e)});}}
  if(url.pathname==='/api/video/toggle'&&req.method==='POST'){const b=await body(req);await video.toggle(!!b.enabled,!!b.consent);return json(res,200,{ok:true});}
  if(url.pathname==='/api/video/test'&&req.method==='POST')return json(res,200,await video.test(Number(process.env.PORT||3000)));
  const videoMatch=url.pathname.match(/^\/api\/video\/([01])\/(start|close|send|stream)$/);
- if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i,{selfGender:b.selfGender??'male'});else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){const allowed=/^(Yap|OmeTV has restricted|OmeTV could not|OmeTV session failed|Paste this side|OmeTV client|Could not apply|OmeTV requires|Sign in to|The video bridge|Connect this participant|Write a message|OmeTV did not|Open this video|Invalid browser|Could not open)/.test(e.message);return json(res,400,{error:allowed?e.message:'Hosted video operation failed. Check the Yap video state and try again.'});}finally{videoOps.delete(i);}}
+ if(videoMatch){const i=Number(videoMatch[1]),operation=videoMatch[2];if(operation==='stream'&&req.method==='GET')return video.subscribe(i,res);if(req.method!=='POST')return json(res,405,{error:'POST required'});const b=await body(req);if(video.sessionSetup||video.slots[i]?.busy||videoOps.has(i))return json(res,409,{error:'Video session is busy'});videoOps.add(i);try{if(operation==='start')await video.start(i);else if(operation==='close')await video.close(i);else if(operation==='send')await video.send(i,b.text);else return json(res,404,{error:'Unknown video operation'});return json(res,200,{ok:true});}catch(e){return json(res,400,{error:video.safeError(e)});}finally{videoOps.delete(i);}}
  if(url.pathname==='/api/status')return json(res,200,{enabled:relay.enabled,tokenSetup,slots:relay.members.map((m,i)=>({...m,queue:m.queue.length,label:labels[i],open:!!slots[i],busy:!!locks[i]||!!slots[i]?.opening,opening:!!slots[i]?.opening,tokenImported:tokenStatus[i],verification:slots[i]?.verification||null,status:slots[i]?.status||'closed',detail:slots[i]?.detail||'',messages:transcripts[i].items}))});
  if(url.pathname==='/api/tokens'&&req.method==='GET')return json(res,200,{tokens:configuredTokens});
  if(url.pathname==='/api/tokens'&&req.method==='POST'){
@@ -132,6 +141,16 @@ const server=http.createServer(async(req,res)=>{try{
   }finally{locks.fill(null);tokenSetup=false;}
  }
  if(url.pathname==='/api/toggle'&&req.method==='POST'){relay.toggle(!!(await body(req)).enabled);return json(res,200,{ok:true});}
+ if(url.pathname==='/api/send'&&req.method==='POST'){
+  const b=await body(req);
+  if(tokenSetup||locks.some(Boolean)||slots.some(s=>!s||s.opening))return json(res,409,{error:'Wait for both chat sessions to be ready.'});
+  locks.fill(true);
+  try{
+   while(slots.some(s=>s?.busy))await new Promise(r=>setTimeout(r,50));
+   const states=await Promise.all(slots.map(s=>s.page.evaluate(()=>window.__textHost?.status())));
+   return json(res,200,queueTextBroadcast({relay,transcripts,states,text:b.text,epochs:b.epochs}));
+  }finally{locks.fill(null);}
+ }
  if(url.pathname==='/api/diagnostics'&&req.method==='GET'){const diagnostics=await Promise.all(slots.map(async(s,i)=>({label:labels[i],open:!!s,...(s?await s.page.evaluate(textSessionDiagnostics,{expectedToken:configuredTokens[i]}):{})})));return json(res,200,{slots:diagnostics});}
  const match=url.pathname.match(/^\/api\/slot\/([01])\/(connect|close|send|inspect)$/);if(!match)return json(res,404,{error:'Not found'});
  const i=Number(match[1]),operation=match[2];

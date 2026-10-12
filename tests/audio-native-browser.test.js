@@ -38,30 +38,6 @@ test('real Chromium input reaches the native field and completes a check in the 
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
 });
 
-test('storage inspection reads different actual values from isolated Chromium sides',async()=>{
- const dir=await mkdtemp(join(tmpdir(),'storage-browser-')),browser=await chromium.launch({headless:true});
- const host=new AudioHost({data:dir,graph:{process:false,close:async()=>{}}});clearInterval(host.timer);await host.loaded;
- try{
-  for(let i=0;i<2;i++){
-   const context=await browser.newContext();await context.route('**/*',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><body>Storage fixture</body>'}));
-   const page=await context.newPage();await page.goto('https://nekto-me.kz/audiochat');
-   await page.evaluate(token=>localStorage.setItem('storage_audio_v2',JSON.stringify({user:{authToken:token}})),'actual-browser-'+i);
-   host.slots[i]={browser:{close:async()=>{}},context,page,epoch:'run-'+i,profileIdentity:'different-configured-'+i};
-  }
-  for(let i=0;i<2;i++){
-   const result=await host.storageToken(i,'run-'+i);assert.equal(result.token,'actual-browser-'+i);assert.equal(result.runId,'different-configured-'+i);assert.equal(result.sessionId,'different-configured-'+i);assert.equal(result.browserEpoch,'run-'+i);assert.equal(JSON.stringify(result).includes('run-'+i),false);
-   assert.equal(await host.slots[i].page.evaluate(()=>JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken),result.token);
-   const evaluated=await host.console(i,{epoch:'run-'+i,code:"localStorage.setItem('console-fixture','side-"+i+"'); console.log('native-side-"+i+"'); JSON.parse(localStorage.getItem('storage_audio_v2')).user.authToken"});
-   assert.equal(evaluated.ok,true);assert.equal(evaluated.value,'actual-browser-'+i);assert.equal(evaluated.pageURL,'https://nekto-me.kz/audiochat');assert.equal(evaluated.browserEpoch,'run-'+i);
-   assert.ok(evaluated.logs.some(x=>x.text==='native-side-'+i));assert.equal(await host.slots[i].page.evaluate(()=>localStorage.getItem('console-fixture')),'side-'+i);
-   const asyncResult=await host.console(i,{epoch:'run-'+i,code:'(async()=>({origin:location.origin,token:JSON.parse(localStorage.getItem("storage_audio_v2")).user.authToken}))()'});
-   assert.equal(JSON.parse(asyncResult.value).token,'actual-browser-'+i);
-   const syntax=await host.console(i,{epoch:'run-'+i,code:'const = invalid'});assert.equal(syntax.ok,false);assert.match(syntax.error,/SyntaxError|Unexpected/);assert.equal(host.ops.size,0);
-
-  }
- }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
-});
-
 test('native reload uses the same Chromium context and preserves storage before any search',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'reload-browser-')),browser=await chromium.launch({headless:true});
  const host=new AudioHost({data:dir,graph:{process:false,close:async()=>{}}});clearInterval(host.timer);await host.loaded;
@@ -73,6 +49,6 @@ test('native reload uses the same Chromium context and preserves storage before 
   host.prepare=async()=>{assert.equal(s.bootstrap.ok,true);assert.equal(s.bootstrap.phase,'document-start');s.prepared=true;s.status='ready';return s;};
   const r=await host.reloadPage(0,s.epoch);assert.equal(r.operation,'authorization');assert.equal(host.slots[0].page,page);assert.equal(host.slots[0].context,context);
   assert.equal(await page.evaluate(()=>window.firstToken),'reload-fixture-token');assert.equal(await page.evaluate(()=>localStorage.getItem('fixture-settings')),'preserved');
-  assert.equal((await host.storageToken(0,s.epoch)).token,'reload-fixture-token');assert.equal(s.stage,'authorized-no-call');assert.equal(context.pages().length,1);
+  assert.equal(s.stage,'authorized-no-call');assert.equal(context.pages().length,1);
  }finally{await host.shutdown();await browser.close();await rm(dir,{recursive:true,force:true});}
 });

@@ -8,7 +8,10 @@ import {runInNewContext} from 'node:vm';
 import {AudioHost} from '../audio-host.js';
 import {inspectVoiceToken,readVoiceStorageToken} from '../voice-inspection.js';
 import {applyVoiceStorageToken} from '../voice-bootstrap.js';
+import {readAudioCallState} from '../audio-call/call-state.js';
+import {confirmVoiceSession} from '../voice-session.js';
 
+const callState=state=>({partnerConnected:!!state.connected,searching:state.status==='searching',verification:state.status==='verification',restricted:state.status==='blocked',attention:state.status==='attention',callEnded:state.status==='ended'});
 const matchingToken={clientFound:true,storageReadable:true,savedTokenMatches:true,liveTokenMatches:true,authenticated:true,socketConnected:true,identityPresent:true,captcha:false,hcaptcha:false,restricted:false,registrationError:0};
 
 test('field application rejects an actual storage mismatch even when the writer reports success',async()=>{
@@ -27,7 +30,7 @@ async function fixture(){
  const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;
  host.slots=[0,1].map(i=>({epoch:'fixture-'+i,page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true}));
  const s=host.slots[0];s.profileIdentity='interactive-fixture-token';s.wire={sentTokenMatches:true,registrationSucceeded:true};
- s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken}:states[0];
+ s.page.evaluate=async fn=>fn===readAudioCallState?callState(states[0]):fn===confirmVoiceSession?{ok:true}:fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken}:states[0];
  s.page.url=()=> 'https://nekto-me.kz/audiochat';s.page.viewportSize=()=>({width:1920,height:1080});
  s.page.mouse={click:async(x,y)=>actions.push(['click',x,y]),wheel:async(x,y)=>actions.push(['wheel',x,y])};
  s.page.keyboard={insertText:async text=>actions.push(['text',text]),press:async key=>actions.push(['key',key])};
@@ -42,7 +45,7 @@ test('native controls click, type, press keys and scroll in the existing browser
   await host.input(0,{epoch:s.epoch,action:'scroll',deltaY:600});
   assert.deepEqual(actions,[['click',480,540],['text','fixture text'],['key','Shift+Tab'],['wheel',0,600]]);
   assert.equal(host.slots[0],s);assert.equal(host.ops.size,0);
-  const inspected=await host.inspect(0);assert.equal(inspected.attempt.attemptId,s.profileIdentity);assert.equal(inspected.attempt.runId,s.profileIdentity);assert.equal(inspected.attempt.sessionId,s.profileIdentity);
+  const inspected=await host.inspect(0);assert.equal(inspected.attempt.attemptId,s.epoch);assert.equal(inspected.attempt.runId,s.epoch);assert.equal(inspected.attempt.sessionId,s.epoch);
   delete inspected.attempt.attemptId;delete inspected.attempt.runId;delete inspected.attempt.sessionId;assert.equal(JSON.stringify(inspected).includes(s.profileIdentity),false);
  }finally{await f.done();}
 });
@@ -72,7 +75,7 @@ test('verification recovery retains identity and requires new consent without an
 test('native controls mute and close on a changed token before sending input',async()=>{
  const f=await fixture();try{
   const {host,s,actions}=f;let closed=0;s.browser.close=async()=>closed++;
-  s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
+  s.page.evaluate=async fn=>fn===readAudioCallState?callState(f.states[0]):fn===confirmVoiceSession?{ok:true}:fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
   host.requested=true;host.enabled=true;
   await assert.rejects(host.input(0,{epoch:s.epoch,action:'text',text:'fixture'}),/token changed/);
   assert.equal(closed,1);assert.deepEqual(actions,[]);assert.equal(host.enabled,false);assert.equal(f.routes.at(-1),false);assert.equal(s.stopped,true);
@@ -82,8 +85,8 @@ test('Start verifies the token before clicking instead of using a changed identi
  const f=await fixture();try{
   const {host,s,actions}=f;let clicks=0;host.prepare=async()=>s;
   f.states[0]={status:'ready',authenticated:true,socketConnected:true};
-  s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
-  s.page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>clicks++});
+  s.page.evaluate=async fn=>fn===readAudioCallState?callState(f.states[0]):fn===confirmVoiceSession?{ok:true}:fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,liveTokenMatches:false}:f.states[0];
+  s.page.locator=selector=>({count:async()=>selector==='#searchCompanyBtn'?1:0,nth:()=>({isVisible:async()=>true,isEnabled:async()=>true,click:async()=>clicks++})});
   await assert.rejects(host.start(0),/token changed/);assert.equal(clicks,0);assert.deepEqual(actions,[]);assert.equal(s.stopped,true);
   assert.equal(host.status().slots[0].callToken.before.liveTokenMatches,false);
  }finally{await f.done();}
@@ -92,7 +95,7 @@ test('Start records the same token after CAPTCHA without closing or retrying',as
  const f=await fixture();try{
   const {host,s}=f;let clicks=0;host.prepare=async()=>s;
   f.states[0]={status:'ready',authenticated:true,socketConnected:true};
-  s.page.locator=selector=>({isVisible:async()=>selector==='#searchCompanyBtn',click:async()=>{clicks++;f.states[0]={status:'verification',detail:'Nekto requires verification.',connected:false};}});
+  s.page.locator=selector=>({count:async()=>selector==='#searchCompanyBtn'?1:0,nth:()=>({isVisible:async()=>true,isEnabled:async()=>true,click:async()=>{clicks++;f.states[0]={status:'verification',detail:'Nekto requires verification.',connected:false};}})});
   await assert.rejects(host.start(0),/verification/);
   const proof=host.status().slots[0].callToken;assert.equal(proof.before.liveTokenMatches,true);assert.equal(proof.after.liveTokenMatches,true);
   assert.equal(clicks,1);assert.equal(s.paused,true);assert.equal(s.stopped,undefined);
@@ -110,7 +113,7 @@ test('clearing a native check cannot resume forwarding before authorization is c
  const f=await fixture();try{
   f.states[0]={status:'verification',connected:false};await f.host.tick();
   f.states[0]={status:'connected',connected:true};
-  f.s.page.evaluate=async fn=>fn===readVoiceStorageToken?{storageReadable:true,token:f.s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,authenticated:false}:f.states[0];
+  f.s.page.evaluate=async fn=>fn===readAudioCallState?callState(f.states[0]):fn===confirmVoiceSession?{ok:true}:fn===readVoiceStorageToken?{storageReadable:true,token:f.s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken,authenticated:false}:f.states[0];
   await f.host.tick();assert.equal(f.s.paused,true);assert.equal(f.s.connected,false);assert.equal(f.host.enabled,false);assert.equal(f.host.captures[0],null);
  }finally{await f.done();}
 });
@@ -129,29 +132,6 @@ test('explicit storage reader returns the actual stored value without writing or
  raw=null;assert.equal(read().token,null);assert.equal(read().storageReadable,true);
  raw='{broken';assert.equal(read().storageReadable,false);assert.equal(read().token,null);
  context.location.origin='https://unrelated.test';assert.throws(read,/left Nekto/);
-});
-test('storage inspection uses the selected live page and rejects stale or closed sessions',async()=>{
- const f=await fixture();try{
-  const {host,s}=f;let evaluated=0;
-  s.page.evaluate=async fn=>{assert.equal(fn,readVoiceStorageToken);evaluated++;return {token:'actual-storage-fixture',storageReadable:true};};
-  const r=await host.storageToken(0,s.epoch);assert.equal(r.token,'actual-storage-fixture');assert.notEqual(r.token,s.profileIdentity);assert.equal(r.slot,0);assert.equal(r.runId,s.profileIdentity);assert.equal(r.sessionId,s.profileIdentity);assert.equal(r.browserEpoch,s.epoch);assert.equal(JSON.stringify(r).includes(s.epoch),false);assert.equal(evaluated,1);
-  assert.equal(s.tokenInspection,undefined);assert.equal(host.attempts[0],null);
-  await assert.rejects(host.storageToken(0,'stale'),/changed/);assert.equal(evaluated,1);
-  s.page.evaluate=async()=>{host.slots[0]=null;return {token:'stale-fixture'};};
-  await assert.rejects(host.storageToken(0,s.epoch),/changed/);assert.equal(host.ops.size,0);
-  assert.deepEqual(await host.storageToken(0,s.epoch),{open:false,token:null});
- }finally{await f.done();}
-});
-
-test('read-only storage inspection works during preparation without releasing its operation lock',async()=>{
- const f=await fixture();try{
-  const {host,s}=f;host.setup=true;host.ops.add(0);
-  s.page.evaluate=async()=>({token:'before-search-fixture',storageReadable:true});
-  assert.equal((await host.storageToken(0,s.epoch)).token,'before-search-fixture');assert.equal(host.ops.has(0),true);assert.equal(host.setup,true);
-  host.setup=false;host.ops.delete(0);
-  const old=s.epoch;s.page.evaluate=async()=>{s.epoch='reloaded';return {token:'old-document'};};
-  await assert.rejects(host.storageToken(0,old),/changed/);
- }finally{f.host.setup=false;f.host.ops.clear();await f.done();}
 });
 test('native reload retains page and identity, mutes the bridge, and never invokes Start',async()=>{
  const f=await fixture();try{

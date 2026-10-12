@@ -128,7 +128,6 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
    if(path.endsWith('/status'))return route.fulfill({json:host.status()});
    if(path.endsWith('/tokens'))return route.fulfill({json:{tokens:host.tokens}});
    if(path.endsWith('/screen'))return route.fulfill({status:204});
-   if(path.endsWith('/storage')){const slot=Number(path.split('/')[3]);const result=await host.storageToken(slot,route.request().postDataJSON().epoch);return route.fulfill({json:result,headers:{'X-Audio-Epoch':result.browserEpoch}});}
    if(path==='/api/audio/0/token'){
     const data=route.request().postDataJSON();submissions.push(data);
     return route.fulfill({json:await host.applySingle(0,data.token)});
@@ -140,7 +139,7 @@ test('AudioHost seeds each actual Chromium context before its first page and ifr
   await dashboard.waitForFunction(()=>!document.querySelector('#hub').hidden);
   await dashboard.locator('#tokenA').fill('button-replacement-fixture');
   await dashboard.locator('#applyTokens').click();
-  await dashboard.waitForFunction(()=>document.querySelector('#card0 .applicationReceipt').textContent.includes('button-replacement-fixture'),null,{timeout:20000});
+  await dashboard.waitForFunction(()=>document.querySelector('#card0 .applicationReceipt').textContent.includes('Совпадает'),null,{timeout:20000});
   assert.deepEqual(submissions,[{token:'button-replacement-fixture'}]);assert.equal(browsers.length,2);
   assert.equal(host.slots[0].page,nativePage);assert.equal(host.slots[0].context,nativeContext);assert.equal(host.slots[1],other);
   assert.notEqual(host.slots[0].epoch,epoch);

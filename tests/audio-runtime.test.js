@@ -29,3 +29,9 @@ test('restriction checkpoint identifies the visible native mask without copying 
  f.state.system.forceDisconnectReason=425;assert.equal(f.client.status().disconnectCode,425);
  assert.equal(JSON.stringify(f.client.diagnostics()).includes('private native prompt'),false);
 });
+
+test('active and finished native call UI outrank a stale search flag, including numeric call ID zero',()=>{
+ const active=fixture({hash:'#/peer'});active.state.user.isSearching=true;active.state.system.isAuth=true;active.state.chat.activeConnectionId=0;assert.equal(active.client.status().status,'connected');
+ const ended=fixture({hash:'#/peer',elements:{'.callScreen__finishText':shown('Собеседник завершил разговор')}});ended.state.user.isSearching=true;const state=ended.client.status();assert.equal(state.ended,true);assert.equal(state.status,'ended');
+ const transition=fixture({hash:'#/peer'});transition.state.user.isSearching=true;assert.equal(transition.client.status().status,'loading');
+});

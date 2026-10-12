@@ -228,22 +228,28 @@ test('runtime detects ICE connections with streamless incoming tracks',async()=>
   assert.equal(result.connected,true);assert.equal(result.backgroundGeneration,0);assert.equal(result.requestedGeneration,1);assert.equal(result.camera,true);assert.deepEqual(result.tracks,[{kind:'video',state:'live'}]);
  }finally{await context.close();await browser.close();}
 });
-test('Yap dashboard connects without fetching or importing OmeTV tokens',async()=>{
+test('video dashboard selects Umingle or Chatruletka and keeps optional session imports separate',async()=>{
  const {readFile}=await import('node:fs/promises'),browser=await chromium.launch({headless:true,args:['--no-sandbox']});
- const page=await browser.newPage();let starts=0,sessionRequests=0,startBody;
+ const page=await browser.newPage();let provider='umingle',starts=0,sessionRequests=0,startBody;const imports=[];
  try{
   await page.route('https://dashboard.test/**',async route=>{
    const path=new URL(route.request().url()).pathname;
-   if(path==='/api/video/status')return route.fulfill({json:{slots:[0,1].map(i=>({label:i===0?'A':'B',open:false,status:'closed',connected:false,busy:false}))}});
-   if(path==='/api/video/sessions'){sessionRequests++;return route.fulfill({json:{sessions:[null,null]}});}
+   if(path==='/api/video/status')return route.fulfill({json:{provider,slots:[0,1].map(i=>({label:i?'B':'A',open:false,status:'closed',connected:false,busy:false}))}});
+   if(path==='/api/video/sessions'){if(route.request().method()==='POST'){imports.push({provider,...route.request().postDataJSON()});return route.fulfill({json:{ok:true,results:[{slot:0,ok:true},{slot:1,ok:true}]}});}sessionRequests++;return route.fulfill({json:{provider,sessions:[null,null]}});}
+   if(path==='/api/video/provider'){provider=route.request().postDataJSON().provider;return route.fulfill({json:{ok:true}});}
    if(path==='/api/video/0/start'){starts++;startBody=route.request().postDataJSON();return route.fulfill({json:{ok:true}});}
    const file=path==='/video'?'../public/video.html':path==='/video.js'?'../public/video.js':path==='/stream-player.js'?'../browser/stream-player.js':null;
    return route.fulfill({contentType:path.endsWith('.js')?'application/javascript':'text/html',body:file?await readFile(new URL(file,import.meta.url),'utf8'):''});
   });
   await page.goto('https://dashboard.test/video');await page.waitForFunction(()=>!document.getElementById('videoHub').hidden);
-  assert.equal(await page.locator('#sessionsForm').count(),0);
-  await page.locator('#videoCard0 .selfGender').selectOption('female');await page.locator('#videoCard0 .start').click();await page.waitForFunction(()=>!document.querySelector('#videoCard0 .start').disabled);
-  assert.equal(starts,1);assert.equal(sessionRequests,0);assert.deepEqual(startBody,{selfGender:'female'});
+  assert.deepEqual(await page.locator('#provider option').evaluateAll(options=>options.map(o=>o.value)),['umingle','chatruletka']);
+  await page.locator('#videoCard0 .start').click();await page.waitForFunction(()=>!document.querySelector('#videoCard0 .start').disabled);
+  assert.equal(starts,1);assert.deepEqual(startBody,{});assert.equal(sessionRequests,1);
+  const restored=page.waitForResponse(response=>response.url().endsWith('/api/video/sessions'));
+  await page.locator('#provider').selectOption('chatruletka');await restored;await page.waitForFunction(()=>!document.querySelector('#provider').disabled);assert.equal(sessionRequests,2);
+  await page.locator('#videoSessions>summary').click();await page.locator('#sessionA').fill('{"cookies":[],"origins":[]}');await page.locator('#applySessions').click();
+  await page.waitForFunction(()=>document.querySelector('#sessionResult').textContent.includes('B: готово'));
+  assert.deepEqual(imports,[{provider:'chatruletka',sessions:['{"cookies":[],"origins":[]}','']}]);
  }finally{await browser.close();}
 });
 test('site guidance and inactive notices cannot block Start; active errors remain detected',async()=>{
