@@ -31,7 +31,7 @@ function renderMessages(){
   for(const item of rows){
     const row=document.createElement('div');row.className=item.system?'systemMessage':'messageRow'+(item.own?' own':'');
     if(item.system){row.textContent=item.text;list.append(row);continue;}
-    if(!item.own){const eye=document.createElement('img');eye.className='eye messageEye';eye.src=item.side?'/eye-b.jpg':'/eye-a.png';eye.alt='Собеседник '+(item.side?'B':'A');row.append(eye);}
+    if(!item.own){const eye=document.createElement('img');eye.className='eye messageEye';eye.src=item.side?'/eye-a.png':'/eye-b.jpg';eye.alt='Собеседник '+(item.side?'B':'A');row.append(eye);}
     const bubble=document.createElement('div');bubble.className='bubble'+(Object.values(item.deliveries).includes('failed')?' failed':'');
     const text=document.createElement('div');text.className='messageText';text.textContent=item.text;bubble.append(text);
     const meta=document.createElement('div');meta.className='meta';
@@ -62,7 +62,7 @@ async function refresh(){if(polling)return;polling=true;try{
 async function connect(i){if(pending.has(i)||pending.has('tokens'))return;pending.add(i);renderControls();try{$('error').textContent='';await api('slot/'+i+'/connect',{});}catch(e){failure(e);}finally{pending.delete(i);await refresh();}}
 for(let i=0;i<2;i++){
   const card=document.createElement('article');card.className='participant';card.id='card'+i;
-  card.innerHTML='<img class="eye" src="'+(i?'/eye-b.jpg':'/eye-a.png')+'" alt=""><div class="participantInfo"><strong>Собеседник '+(i?'B':'A')+'</strong><span class="state">Не подключён</span><p class="issue"></p></div><div class="participantActions"><button class="connect">Поиск</button><button class="close" disabled aria-label="Отключить собеседника '+(i?'B':'A')+'">×</button></div>';
+  card.innerHTML='<img class="eye" src="'+(i?'/eye-a.png':'/eye-b.jpg')+'" alt=""><div class="participantInfo"><strong>Собеседник '+(i?'B':'A')+'</strong><span class="state">Не подключён</span><p class="issue"></p></div><div class="participantActions"><button class="connect">Поиск</button><button class="close" disabled aria-label="Отключить собеседника '+(i?'B':'A')+'">×</button></div>';
   $('cards').append(card);card.querySelector('.connect').onclick=()=>connect(i);
   card.querySelector('.close').onclick=async()=>{if(pending.size)return;pending.add(i);renderControls();try{await api('slot/'+i+'/close',{});}catch(e){failure(e);}finally{pending.delete(i);await refresh();}};
 }
