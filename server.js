@@ -13,8 +13,10 @@ import {ProviderVideoHost} from './provider-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
+import {localRequestError,localDashboardHtml} from './local-dashboard.js';
+const localMode=process.env.LOCAL_EXTENSION_MODE==='1';
 const password=process.env.DASHBOARD_PASSWORD;
-if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
+if(!localMode&&(!password||password.length<16))throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
 const relay=new Relay(),slots=Array(2).fill(null),locks=Array(2).fill(null),sessions=new Set();
 let configuredTokens=[null,null],tokenSetup=false;
 const tokenStatus=[false,false],transcripts=[new Transcript(),new Transcript()];
@@ -77,19 +79,21 @@ async function body(req,limit=12000){let chunks=[],size=0;for await(const chunk 
 const failures=new Map();
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
- if(url.pathname==='/health')return json(res,200,{ok:true,service:'nekto-text-host'});
+ if(localMode){const error=localRequestError(req,url.pathname);if(error)return json(res,403,{error});}
+ if(url.pathname==='/health')return json(res,200,{ok:true,service:localMode?'nekto-local-extension':'nekto-text-host'});
  if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css','/simulator','/simulator.js','/eye-a.png','/eye-b.jpg'].includes(url.pathname)){
   if(url.pathname==='/video-fixture'){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><body>Generated media test</body>');}
-  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.png')?'image/png':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');if(/\.(png|jpg)$/.test(name))res.setHeader('Cache-Control','public, max-age=86400');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
+  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.png')?'image/png':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');if(/\.(png|jpg)$/.test(name))res.setHeader('Cache-Control','public, max-age=86400');const content=await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url));return res.end(localMode&&name.endsWith('.html')?localDashboardHtml(content.toString()):content);}
  if(req.method==='POST'){
   const origin=req.headers.origin;if(origin&&origin!== 'https://'+req.headers.host&&origin!=='http://'+req.headers.host)return json(res,403,{error:'Invalid origin'});
  }
  if(url.pathname==='/api/login'&&req.method==='POST'){
+  if(localMode)return json(res,200,{ok:true});
   const ip=req.socket.remoteAddress,record=failures.get(ip)||{count:0,at:Date.now()};if(Date.now()-record.at>600000){record.count=0;record.at=Date.now();}if(record.count>=15)return json(res,429,{error:'Too many attempts. Wait 10 minutes.'});
   const b=await body(req),a=Buffer.from(String(b.password||'')),p=Buffer.from(password);if(a.length!==p.length||!timingSafeEqual(a,p)){record.count++;failures.set(ip,record);return json(res,401,{error:'Incorrect password'});}
   const token=crypto.randomUUID();sessions.add(token);setTimeout(()=>sessions.delete(token),86400000).unref();res.setHeader('Set-Cookie','session='+token+'; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400'+(process.env.NODE_ENV==='production'?'; Secure':''));return json(res,200,{ok:true});
  }
- const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
+ const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!localMode&&!sessions.has(token))return json(res,401,{error:'Sign in first'});
  if(url.pathname==='/api/audio/status'&&req.method==='GET'){await audio.loaded;return json(res,200,audio.status());}
  if(url.pathname==='/api/audio/tokens'&&req.method==='GET'){await audio.loaded;return json(res,200,{tokens:audio.tokens});}
  if(url.pathname==='/api/audio/proxies'&&req.method==='GET'){await audio.loaded;return json(res,200,{proxies:audio.proxies});}
@@ -174,3 +178,4 @@ const server=http.createServer(async(req,res)=>{try{
 server.listen(Number(process.env.PORT||3000),'0.0.0.0',()=>console.log('Nekto text dashboard ready'));
 async function shutdown(){relay.toggle(false);await audio.shutdown();await video.shutdown();await videoBrowser?.close().catch(()=>{});for(const s of slots)if(s)await s.context.close().catch(()=>{});await browser?.close().catch(()=>{});server.close(()=>process.exit(0));}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);
+

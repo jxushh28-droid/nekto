@@ -7,11 +7,12 @@ async function api(path,data){
 async function signIn(){try{await api('status');$('login').hidden=true;$('simulatorHub').hidden=false;}catch{$('login').hidden=false;$('simulatorHub').hidden=true;}}
 function stop(){clearInterval(timer);timer=null;$('simulationStart').disabled=false;$('simulationStop').disabled=true;}
 function clear(){stop();steps=0;planned=0;$('simulationLog').replaceChildren();$('simulationSummary').textContent='';}
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await signIn();}catch(err){$('error').textContent=err.message;}};
+if($('loginForm'))$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await signIn();}catch(err){$('error').textContent=err.message;}};
 $('simulationForm').onsubmit=e=>{
  e.preventDefault();if(timer)return;
  const digits=$('simulationPhone').value.replace(/\D/g,''),count=Number($('simulationCount').value),channel=$('simulationChannel').value;
  if(!/^([78])\d{10}$/.test(digits)||!Number.isInteger(count)||count<1||count>30){$('error').textContent='Введите номер +7 и от 1 до 30 шагов.';return;}
+ if(digits.slice(-10)==='7788328909'){$('error').textContent='Этот номер защищён.';return;}
  clear();$('error').textContent='';planned=count;
  const phone='+7 '+digits.slice(-10,-7)+' '+digits.slice(-7,-4)+' '+digits.slice(-4,-2)+' '+digits.slice(-2);
  $('simulationStart').disabled=true;$('simulationStop').disabled=false;
@@ -27,3 +28,4 @@ $('simulationStop').onclick=()=>{stop();$('simulationSummary').textContent='Си
 $('simulationClear').onclick=clear;
 window.addEventListener('pagehide',stop);
 void signIn();
+

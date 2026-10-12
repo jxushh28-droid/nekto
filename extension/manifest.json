@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Nekto Local",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "Open your local Nekto dashboard. Chat browsers run on your computer using your connection.",
+  "action": {"default_title": "Open Nekto Local"},
+  "background": {"service_worker": "background.js", "type": "module"},
+  "host_permissions": ["http://127.0.0.1/*"]
+}

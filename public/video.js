@@ -58,5 +58,5 @@ $('provider').onchange=()=>setup('provider',{provider:$('provider').value});
 $('sessionsForm').onsubmit=e=>{e.preventDefault();void setup('sessions',{sessions:[$('sessionA').value.trim(),$('sessionB').value.trim()]});};
 $('validateSessions').onclick=()=>setup('validate',{});
 $('bridgeToggle').onclick=async()=>{try{await api('video/toggle',{enabled:!current?.enabled,consent:$('consent').checked});await refresh();}catch(e){fail(e);}};$('consent').onchange=refresh;
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await refresh();}catch(e){fail(e);}};
+if($('loginForm'))$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await refresh();}catch(e){fail(e);}};
 setInterval(()=>{if(!document.hidden)refresh();},1000);refresh();

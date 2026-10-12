@@ -71,6 +71,6 @@ $('compose').onsubmit=async e=>{e.preventDefault();const editor=$('message'),tex
 };
 $('message').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();$('compose').requestSubmit();}};
 $('connectBoth').onclick=async()=>{await Promise.all([connect(0),connect(1)]);};
-$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await refresh();}catch(err){failure(err);}};
+if($('loginForm'))$('loginForm').onsubmit=async e=>{e.preventDefault();try{await api('login',{password:$('password').value});$('password').value='';$('error').textContent='';await refresh();}catch(err){failure(err);}};
 $('tokenForm').onsubmit=async e=>{e.preventDefault();pending.add('tokens');renderControls();$('tokenResult').textContent='Сохраняем токены и подключаем…';try{const r=await api('tokens',{tokens:[$('tokenA').value.trim(),$('tokenB').value.trim()]});$('tokenResult').textContent=r.results.map(x=>['A','B'][x.slot]+': '+(x.ok?'поиск запущен':x.error)).join(' · ');if(r.ok)$('tokens').open=false;}catch(err){failure(err);}finally{pending.delete('tokens');await refresh();}};
 setInterval(()=>{if(!document.hidden)refresh();},1000);refresh();

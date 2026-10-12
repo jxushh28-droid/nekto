@@ -1,0 +1,25 @@
+name: nekto-local
+services:
+  dashboard:
+    build: .
+    ports:
+      - "127.0.0.1:3100:3000"
+    environment:
+      LOCAL_EXTENSION_MODE: "1"
+      LOCAL_DASHBOARD_PORT: "3100"
+      PORT: "3000"
+      TEXT_DATA_DIR: /data/text-host
+    volumes:
+      - nekto-local-data:/data
+    shm_size: 1gb
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(async r=>{if(!r.ok||(await r.json()).service!=='nekto-local-extension')process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+      start_period: 15s
+volumes:
+  nekto-local-data:

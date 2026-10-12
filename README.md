@@ -1,4 +1,33 @@
-# Nekto Pair
+# Nekto Local — Chrome extension + local dashboard
+
+## Start
+
+1. Extract the whole package to a permanent folder. Install and start [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Windows/macOS), or Docker Engine with Compose v2 (Linux). Windows Docker must use Linux containers.
+2. Run **start-windows.cmd**, **start-macos.command**, or `bash start-linux.sh`. The first build downloads a large browser image and runs checks; allow several minutes. Later starts reuse it.
+3. In Chrome, open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**, and select the package’s **extension** folder.
+4. Pin **Nekto Local** and click it. It opens `http://127.0.0.1:3100/audio`. The Text, Audio, Video and offline Simulator tabs remain available.
+
+No dashboard password is required locally. The helper must be running; if it is stopped, the extension shows setup instructions. Chrome cannot start Docker by itself. The launcher also opens the dashboard, so you can use it without the extension.
+
+## Your connection and IP
+
+The chat browsers run inside Docker on **your computer**, using your computer’s internet connection rather than Railway. Leave both audio proxy fields empty to connect directly. A VPN or proxy changes the outgoing address. In each open Audio session, click **IP браузера** to see that browser’s current public IP. `127.0.0.1` is the local dashboard address, not your public IP. A home connection does not guarantee that sites will stop asking for verification.
+
+Saved authTokens, browser sessions and proxy settings stay in the `nekto-local-data` Docker volume. The local dashboard is bound to loopback, with Host and Origin checks; it is available to software and people using your computer. Do not change its port mapping to a public interface or expose its password-free mode on Railway. The existing Railway deployment is unchanged and still requires its password.
+
+## Stop / troubleshoot
+
+Run **stop-windows.cmd** or `bash stop-linux-macos.sh` to stop the helper without deleting saved sessions. Start it again with the same launcher. It automatically restarts when Docker restarts.
+
+If startup fails, check the launcher output and Docker Desktop’s `nekto-local` container logs. From the package folder you can run `docker compose -f compose.local.yaml logs --tail=100`. Port 3100 must be free. To rebuild after a source update, run the start launcher again.
+
+The Simulator is an offline synthetic demonstration: it sends no SMS or calls. It preserves the protected-number restriction.
+
+---
+
+## Application details
+
+### Nekto Pair
 
 A black and green web dashboard for two text, audio or video sessions. The app has no Discord integration.
 
@@ -28,11 +57,11 @@ The adapters use Umingle's native `button.skipButton`, `textarea.messageInput`, 
 
 Umingle rejected the development cloud browser as a VPN/proxy connection. Live matching has not been verified from that browser. Native provider acceptance and availability still determine whether a hosted session connects.
 
-## Run and deploy
+## Development / hosted deployment reference
 
 Use the Dockerfile for matching Playwright Chromium, PulseAudio and FFmpeg versions. Set `DASHBOARD_PASSWORD` to a private value of at least 16 characters. `PORT` defaults to 3000. `TEXT_DATA_DIR` defaults to `/data/text-host`; attach a persistent volume at `/data` to retain session settings. Railway uses `/health`.
 
-The dashboard requires authentication for its APIs, checks POST origins, keeps private session files off the public routes, and omits message contents and full session credentials from operation logs. Close other browser modes before opening audio.
+The hosted mode requires authentication for its APIs. The local Compose configuration enables password-free loopback access. Both check request origins, keeps private session files off the public routes, and omits message contents and full session credentials from operation logs. Close other browser modes before opening audio.
 
 For development, run `npm ci`, install Playwright Chromium and the audio system dependencies, then `npm start` with the environment variables set. `npm test` runs the unit and offline browser fixtures. The Docker build runs all tests and then removes development packages. GitHub Actions builds that same image. Generated media fixtures validate routing without contacting Nekto or other users.
 
