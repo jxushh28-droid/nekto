@@ -28,7 +28,7 @@ async function fixture(){
  const states=[{status:'connected',connected:true},{status:'connected',connected:true}];
  const graph={process:true,routing:async value=>routes.push(value),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};
  const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;
- host.slots=[0,1].map(i=>({epoch:'fixture-'+i,page:{evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true}));
+ host.slots=[0,1].map(i=>({epoch:'fixture-'+i,page:{waitForLoadState:async()=>{},evaluate:async()=>states[i]},browser:{close:async()=>{}},connected:true}));
  const s=host.slots[0];s.profileIdentity='interactive-fixture-token';s.wire={sentTokenMatches:true,registrationSucceeded:true};
  s.page.evaluate=async fn=>fn===readAudioCallState?callState(states[0]):fn===confirmVoiceSession?{ok:true}:fn===readVoiceStorageToken?{storageReadable:true,token:s.profileIdentity} : fn===applyVoiceStorageToken?{ok:true,changed:false,savedTokenMatches:true}:fn===inspectVoiceToken?{...matchingToken}:states[0];
  s.page.url=()=> 'https://nekto-me.kz/audiochat';s.page.viewportSize=()=>({width:1920,height:1080});

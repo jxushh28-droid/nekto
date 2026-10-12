@@ -17,7 +17,7 @@ async function fixture(){
  const dir=await mkdtemp(join(tmpdir(),'voice-test-')),routes=[],states=[{connected:true,status:'connected'},{connected:true,status:'connected'}];
  const graph={process:true,routing:async v=>routes.push(v),close:async()=>{},capture:()=>{const child=new EventEmitter();child.stdout=new EventEmitter();child.kill=()=>{};return child;}};
  const host=new AudioHost({data:dir,graph});clearInterval(host.timer);await host.loaded;
- host.slots=[0,1].map(i=>({page:{evaluate:async fn=>{
+ host.slots=[0,1].map(i=>({page:{waitForLoadState:async()=>{},evaluate:async fn=>{
   if(fn===confirmVoiceSession)return {ok:true,diagnostics:{authenticated:true,socketConnected:true}};
   if(fn===readAudioPrompt)return {visible:true,category:'unknown',fieldCount:0};
   if(fn===readAudioCallState){const state=await host.state(host.slots[i]);return {partnerConnected:!!state.connected,searching:state.status==='searching',callEnded:state.status==='ended',verification:state.status==='verification',restricted:state.status==='blocked',attention:state.status==='attention'};}
@@ -136,18 +136,18 @@ test('muting still attempts the second direction when the first mute fails',asyn
  graph.pactl=async(...args)=>{commands.push(args);if(args[1]==='10')throw Error('fixture mute failure');};
  await assert.rejects(graph.routing(false),/fixture mute failure/);assert.equal(commands.length,2);assert.equal(graph.routeKey,null);
 });
-test('first Start waits one second after current native authorization and later searches do not',async()=>{
+test('first Start waits 1.5 seconds after full page load and later searches do not',async()=>{
  const f=await fixture();try{
   const slot=f.host.slots[0];f.host.prepare=async()=>slot;f.states[0]={status:'ready',connected:false};
-  const originalEvaluate=slot.page.evaluate;let authorizedAt=0,clicks=0;
+  const originalEvaluate=slot.page.evaluate;let authorizedAt=0,loadedAt=0,loadCalls=0,clicks=0;slot.page.waitForLoadState=async state=>{assert.equal(state,'load');loadCalls++;await new Promise(r=>setTimeout(r,100));loadedAt=performance.now();};
   slot.page.evaluate=async fn=>{if(fn===confirmVoiceSession){authorizedAt||=performance.now();return {ok:true,diagnostics:{authenticated:true,socketConnected:true}};}return originalEvaluate(fn);};
-  const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>{if(!clicks)assert.ok(performance.now()-authorizedAt>=1000);clicks++;f.states[0]={status:'searching',connected:false};}};
+  const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>{if(!clicks)assert.ok(performance.now()-loadedAt>=1500);clicks++;f.states[0]={status:'searching',connected:false};}};
   slot.page.locator=()=>({count:async()=>1,nth:()=>button});
-  await f.host.start(0);assert.equal(clicks,1);assert.equal(slot.firstSearchWaited,true);
+  await f.host.start(0);assert.equal(clicks,1);assert.equal(slot.firstSearchWaited,true);assert.equal(loadCalls,1);assert.ok(loadedAt>authorizedAt);
   f.states[0]={status:'ready',connected:false};const nextAt=performance.now();await f.host.start(0);assert.equal(clicks,2);assert.ok(performance.now()-nextAt<900);
  }finally{await f.done();}
 });
-test('verification appearing during the one-second first wait prevents Start',async()=>{
+test('verification appearing during the 1.5-second first wait prevents Start',async()=>{
  const f=await fixture();try{
   const slot=f.host.slots[0];f.host.prepare=async()=>slot;f.states[0]={status:'ready',connected:false};let clicks=0;
   const button={isVisible:async()=>true,isEnabled:async()=>true,click:async()=>clicks++};slot.page.locator=()=>({count:async()=>1,nth:()=>button});

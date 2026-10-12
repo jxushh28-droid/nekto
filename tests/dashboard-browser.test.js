@@ -1,7 +1,49 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {chromium} from 'playwright';
 import {voiceStorageState,voiceStorageMatches} from '../voice-storage-state.js';
 import {primeVoiceStorage} from '../voice-bootstrap.js';
+import {normalizeAudioProxy} from '../audio-proxy-config.js';
 const base='https://dashboard-fixture.test';
+test('audio proxy fields restore saved settings, accept a list row, and lock while browsers are open',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),requests=[];let proxies=['socks5://203.0.113.8:1080',null];
+  const status={enabled:false,configured:[true,true],slots:[0,1].map(i=>({label:i?'B':'A',open:false,closable:false,status:'closed',connected:false,busy:false}))};
+  await context.route(base+'/**',async route=>{
+   const path=new URL(route.request().url()).pathname;
+   if(path.startsWith('/api/')){
+    if(path==='/api/audio/proxies'){
+     if(route.request().method()==='POST'){requests.push(route.request().postDataJSON());proxies=requests.at(-1).proxies.map(normalizeAudioProxy);}
+     return route.fulfill({json:{ok:true,proxies}});
+    }
+    return route.fulfill({json:path.endsWith('/tokens')?{tokens:['fixture-a','fixture-b']}:status});
+   }
+   const file=path==='/audio'?'audio.html':path.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/audio');await page.locator('#proxySettings > summary').click();
+  await page.waitForFunction(()=>document.getElementById('proxyA').value==='socks5://203.0.113.8:1080');
+  const row='| socks5 | 203.0.113.9 | 443 | DE | Germany | elite | 24ms |';
+  await page.locator('#proxyA').fill(row);await page.locator('#proxyB').fill('');await page.locator('#saveProxies').click();
+  await page.waitForFunction(()=>document.getElementById('proxyResult').textContent==='Прокси сохранены.');
+  assert.deepEqual(requests,[{proxies:[row,'']}]);assert.equal(await page.locator('#proxyA').inputValue(),'socks5://203.0.113.9:443');
+  status.slots[0].closable=true;await page.waitForFunction(()=>document.getElementById('saveProxies').disabled);
+ }finally{await browser.close();}
+});
+test('simulator browser runs a local scenario without sending messages or external requests',async()=>{
+ const browser=await chromium.launch({headless:true});
+ try{
+  const context=await browser.newContext(),apiCalls=[],external=[];
+  await context.route('**/*',async route=>{
+   const url=new URL(route.request().url());if(url.origin!==base){external.push(url.href);return route.abort();}
+   if(url.pathname.startsWith('/api/')){apiCalls.push(url.pathname);return route.fulfill({json:{enabled:false,slots:[]}});}
+   const file=url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);
+   return route.fulfill({contentType:file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html',body:await readFile(new URL('../public/'+file,import.meta.url),'utf8')});
+  });
+  const page=await context.newPage();await page.goto(base+'/simulator');await page.locator('#simulationPhone').fill('+7 700 000 00 00');await page.locator('#simulationCount').fill('2');await page.locator('#simulationChannel').selectOption('both');await page.locator('#simulationStart').click();
+  await page.waitForFunction(()=>document.querySelectorAll('#simulationLog li').length===2);
+  assert.match(await page.locator('#simulationSummary').textContent(),/Отправлено SMS и звонков: 0/);assert.deepEqual(apiCalls,['/api/status']);assert.deepEqual(external,[]);
+ }finally{await browser.close();}
+});
 test('audio IP button checks only its current browser and renders the returned address',async()=>{
  const browser=await chromium.launch({headless:true});
  try{

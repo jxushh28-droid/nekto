@@ -13,6 +13,7 @@ import {inspectVoiceToken,readVoiceStorageToken} from './voice-inspection.js';
 import {validateNativeInput} from './native-input.js';
 import {advanceAudioCall} from './audio-call/call-controls.js';
 import {readBrowserIp} from './browser-ip.js';
+import {loadAudioProxies,saveAudioProxies,audioProxyOptions} from './audio-proxy-config.js';
 
 const runtime=await readFile(new URL('./browser/audio-runtime.js',import.meta.url),'utf8');
 const site='https://nekto-me.kz/audiochat#/';
@@ -56,7 +57,7 @@ export class AudioHost{
     this.storageReceipts=new WeakMap();
     this.ipRequests=new WeakMap();
     this.screens=[null,null];
-    this.loaded=mkdir(this.data,{recursive:true}).then(()=>loadAudioTokens(this.data)).then(v=>this.tokens=v);
+    this.loaded=mkdir(this.data,{recursive:true}).then(async()=>{this.tokens=await loadAudioTokens(this.data);this.proxies=await loadAudioProxies(this.data);});
     this.timer=setInterval(()=>void this.tick(),500);
   }
 
@@ -79,11 +80,13 @@ export class AudioHost{
       const profile=await this.profiles.load(i,this.tokens[i]);
       await this.graph.ensure();
 
+      const proxy=audioProxyOptions(this.proxies?.[i]);
       const browser=await this.launch({
         headless:true,
         channel:'chromium',
         ignoreDefaultArgs:['--mute-audio'],
-        args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required'],
+        args:['--disable-dev-shm-usage','--autoplay-policy=no-user-gesture-required',...(proxy?['--force-webrtc-ip-handling-policy=disable_non_proxied_udp']:[])],
+        ...(proxy?{proxy}:{}),
         env:this.graph.browserEnv(i)
       });
 
@@ -354,8 +357,11 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
         if(!confirmed.ok){s.failureStatus=confirmed.reason==='verification-required'?'verification':confirmed.reason==='native-restriction'?'blocked':'error';throw Error('Nekto did not confirm this voice session: '+confirmed.reason);}
         s.authorization=confirmed.diagnostics;
         if(!s.firstSearchWaited){
+          s.stage='wait-page-load';this.recordAttempt(i,s);
+          try{await s.page.waitForLoadState('load',{timeout:45000});}catch{throw Error('Nekto audio website did not fully load. The call has not been started.');}
+          check();
           s.stage='wait-before-start';this.recordAttempt(i,s);
-          await new Promise(resolve=>setTimeout(resolve,1000));check();s.firstSearchWaited=true;
+          await new Promise(resolve=>setTimeout(resolve,1500));check();s.firstSearchWaited=true;
         }
       };
       s.stage=next?'next-call':'before-start';
@@ -804,6 +810,13 @@ console.log(JSON.stringify({event:'audio_registration_diagnostic',slot:i?'B':'A'
       if(this.slots[i]===s){s.error=this.error(e);s.status=s.failureStatus||'error';await this.stopFailed(i,s);}
       throw Error(this.error(e));
     }finally{this.ops.delete(i);}
+  }
+
+  async configureProxies(values){
+    if(this.setup||this.ops.size||this.slots.some(Boolean))throw Error('Audio: close both browsers before changing proxies.');
+    this.setup=true;
+    try{await this.loaded;this.proxies=await saveAudioProxies(this.data,values);return {ok:true,proxies:this.proxies};}
+    finally{this.setup=false;}
   }
 
   async checkIp(i,epoch){

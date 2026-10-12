@@ -4,14 +4,15 @@
 <body class="textPage"><main>
   <section id="login" class="loginCard"><form id="loginForm"><label>Пароль<input id="password" type="password" autocomplete="current-password" required></label><button class="primary">Войти →</button></form></section>
   <section id="hub" hidden>
-    <nav class="modeTabs" aria-label="Режим чата"><a class="selected" href="/" aria-current="page">Текст</a><a href="/audio">Аудио</a><a href="/video">Видео</a></nav>
-    <div class="pageHeading"><button id="connectBoth" class="primary">Подключить обоих <span aria-hidden="true">↗</span></button></div>
+    <nav class="modeTabs" aria-label="Режим чата"><a class="selected" href="/" aria-current="page">Текст</a><a href="/audio">Аудио</a><a href="/video">Видео</a><a href="/simulator">Симулятор</a></nav>
+    <div class="pageHeading"><div><p class="eyebrow">ТЕКСТОВЫЙ ЧАТ</p></div><button id="connectBoth" class="primary">Подключить обоих <span aria-hidden="true">↗</span></button></div>
     <details id="tokens" class="settings" open><summary>Токены сессий <span>authToken A + B</span></summary><form id="tokenForm"><label>Собеседник A<input id="tokenA" type="text" autocomplete="off" spellcheck="false" maxlength="2048" placeholder="authToken A" required></label><label>Собеседник B<input id="tokenB" type="text" autocomplete="off" spellcheck="false" maxlength="2048" placeholder="authToken B" required></label><button id="applyTokens">Сохранить и подключить</button></form><p id="tokenResult" role="status"></p></details>
     <section class="conversation" aria-label="Общий разговор">
       <div class="conversationHeader"><span id="bridge" role="status">Ожидаем подключения</span><span class="liveDot" aria-hidden="true"></span></div>
       <div id="cards" class="participants"></div>
-      <div id="messages" class="messages sharedFeed" role="log" aria-label="Сообщения обоих собеседников" aria-live="polite"><div class="empty"><div class="emptyEyes"><img src="/eye-b.jpg" alt=""><img src="/eye-a.png" alt=""></div></div></div>
+      <div id="messages" class="messages sharedFeed" role="log" aria-label="Сообщения обоих собеседников" aria-live="polite"><div class="empty"><div class="emptyEyes"><img src="/eye-b.jpg" alt=""><img src="/eye-a.png" alt=""></div><h2>Здесь начнётся разговор</h2><p>Подключите обоих собеседников.</p></div></div>
       <form id="compose" class="compose sharedComposer"><label class="srOnly" for="message">Сообщение обоим собеседникам</label><textarea id="message" placeholder="Сообщение обоим собеседникам…" maxlength="4000" rows="1" disabled></textarea><button id="send" class="primary" type="submit" disabled aria-label="Отправить обоим">Отправить <span aria-hidden="true">↑</span></button></form>
+      <div class="composerFooter"><span id="composerHint"></span></div>
     </section>
   </section><p id="error" role="alert"></p>
 </main><script src="/app.js"></script></body></html>

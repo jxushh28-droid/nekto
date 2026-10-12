@@ -10,7 +10,7 @@ The server validates both current conversation IDs and queue capacities before q
 
 ## Audio
 
-The audio page uses native call state and call controls migrated from `jxushh28-droid/nekto-audio`, without its Discord code. Enter voice-session authTokens from `storage_audio_v2.user.authToken`. Tokens are saved before the native page loads; the client's own authorization must succeed. The first search waits **one second**. Later searches reuse the same browser without that delay.
+The audio page uses native call state and call controls migrated from `jxushh28-droid/nekto-audio`, without its Discord code. Enter voice-session authTokens from `storage_audio_v2.user.authToken`. Tokens are saved before the native page loads; the client's own authorization must succeed. The first search waits **1.5 seconds**. Later searches reuse the same browser without that delay.
 
 An active call and the visible finished-call screen take precedence over Nekto's stale `isSearching` flag. **Поиск** preserves a current partner; **Следующий** explicitly ends the call, answers a recognized ordinary End confirmation and starts one new search. After a stranger leaves, the finished browser stays open for the next search. Verification and unfamiliar prompts remain available through the native screen in the advanced disclosure. There are no CAPTCHA reload loops or automatic verification answers.
 
@@ -37,3 +37,9 @@ The dashboard requires authentication for its APIs, checks POST origins, keeps p
 For development, run `npm ci`, install Playwright Chromium and the audio system dependencies, then `npm start` with the environment variables set. `npm test` runs the unit and offline browser fixtures. The Docker build runs all tests and then removes development packages. GitHub Actions builds that same image. Generated media fixtures validate routing without contacting Nekto or other users.
 
 `public/eye-a.png` and `public/eye-b.jpg` are the two original images supplied by the user. CSS displays them as circular avatars; the source images are unchanged.
+
+Audio proxy settings accept one HTTP/SOCKS5 URL or copied proxy-table row per browser. Save them while both audio browsers are closed, then open the sessions. SOCKS5 credentials are unsupported by Chromium. HTTP proxy authentication is supported. Proxied browsers disable non-proxied WebRTC UDP; the proxy and provider still need compatible audio transport. The IP button checks the live browser connection.
+
+The first audio search waits for the website load event and native authorization, then waits 1.5 seconds.
+
+The Simulator tab runs local synthetic SMS/call events only. It has no messaging backend, third-party verification endpoints, or live-send mode.

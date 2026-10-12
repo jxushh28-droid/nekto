@@ -78,9 +78,9 @@ const failures=new Map();
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
  if(url.pathname==='/health')return json(res,200,{ok:true,service:'nekto-text-host'});
- if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css','/eye-a.png','/eye-b.jpg'].includes(url.pathname)){
+ if(req.method==='GET'&&['/','/app.js','/style.css','/video','/video.js','/video.css','/stream-player.js','/video-fixture','/audio','/audio.js','/audio.css','/simulator','/simulator.js','/eye-a.png','/eye-b.jpg'].includes(url.pathname)){
   if(url.pathname==='/video-fixture'){res.setHeader('Content-Type','text/html');return res.end('<!doctype html><body>Generated media test</body>');}
-  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.png')?'image/png':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');if(/\.(png|jpg)$/.test(name))res.setHeader('Cache-Control','public, max-age=86400');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
+  const name=url.pathname==='/'?'index.html':url.pathname==='/video'?'video.html':url.pathname==='/audio'?'audio.html':url.pathname==='/simulator'?'simulator.html':url.pathname.slice(1);res.setHeader('Content-Type',name.endsWith('.png')?'image/png':name.endsWith('.jpg')?'image/jpeg':name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html');if(/\.(png|jpg)$/.test(name))res.setHeader('Cache-Control','public, max-age=86400');return res.end(await readFile(new URL((name==='stream-player.js'?'./browser/':'./public/')+name,import.meta.url)));}
  if(req.method==='POST'){
   const origin=req.headers.origin;if(origin&&origin!== 'https://'+req.headers.host&&origin!=='http://'+req.headers.host)return json(res,403,{error:'Invalid origin'});
  }
@@ -92,10 +92,12 @@ const server=http.createServer(async(req,res)=>{try{
  const token=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('session='))?.slice(8);if(!sessions.has(token))return json(res,401,{error:'Sign in first'});
  if(url.pathname==='/api/audio/status'&&req.method==='GET'){await audio.loaded;return json(res,200,audio.status());}
  if(url.pathname==='/api/audio/tokens'&&req.method==='GET'){await audio.loaded;return json(res,200,{tokens:audio.tokens});}
+ if(url.pathname==='/api/audio/proxies'&&req.method==='GET'){await audio.loaded;return json(res,200,{proxies:audio.proxies});}
  const audioScreen=url.pathname.match(/^\/api\/audio\/([01])\/screen$/);if(audioScreen&&req.method==='GET'){const frame=await audio.screen(Number(audioScreen[1]));if(!frame){res.writeHead(204);return res.end();}res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'no-store','X-Screen-Time':String(frame.at),'X-Screen-Epoch':frame.epoch});return res.end(frame.bytes);}
  if(url.pathname.startsWith('/api/audio/')&&req.method==='POST'){
-  if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
+  if((slots.some(Boolean)||video.slots.some(Boolean))&&!/\/(close|consent|proxies)$/.test(url.pathname))return json(res,409,{error:'Close text and video sessions before starting audio.'});
   const b=await body(req);try{
+   if(url.pathname==='/api/audio/proxies')return json(res,200,await audio.configureProxies(b.proxies));
    const control=url.pathname.match(/^\/api\/audio\/([01])\/(input|inspect|reload|ip)$/);if(control){
     const i=Number(control[1]);
     const result=control[2]==='input'?await audio.input(i,b):control[2]==='reload'?await audio.reloadPage(i,b.epoch):control[2]==='ip'?await audio.checkIp(i,b.epoch):await audio.inspect(i);
