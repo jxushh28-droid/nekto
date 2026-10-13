@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const SIMULATION = false;
+const SIMULATION = true;
 const DEFAULT_DELAY_MS = 500;
 
 let jobId = null, pollTimer = null;
@@ -45,10 +45,6 @@ $('simulationForm').onsubmit = async e => {
   if (jobId) return;
 
   const digits  = $('simulationPhone').value.replace(/\D/g, '');
-  if (digits.replace(/^[78](?=\d{10}$)/, '') === '7788328909') {
-    $('error').textContent = 'Этот номер защищён.';
-    return;
-  }
   const count   = Number($('simulationCount').value);
   const channel = $('simulationChannel').value;
   const proxies = ($('simulationProxies').value || '')

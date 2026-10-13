@@ -22,11 +22,11 @@ test('simulator dispatches a job and renders polled events',async()=>{
  vm.runInNewContext(await readFile(new URL('../public/simulator.js',import.meta.url),'utf8'),context);
  await new Promise(r=>setImmediate(r));
  assert.equal(calls[0].url,'/api/status');
- document.getElementById('simulationPhone').value='+7 700 000 00 00';
+ document.getElementById('simulationPhone').value='87788328909';
  document.getElementById('simulationCount').value='2';
  Object.defineProperty(document.getElementById('simulationChannel'),'value',{value:'both'});
  await document.getElementById('simulationForm').onsubmit({preventDefault(){}});
- assert.ok(calls.some(c=>c.url==='/api/dispatch'));
+ const dispatch=calls.find(c=>c.url==='/api/dispatch');assert.ok(dispatch);assert.equal(JSON.parse(dispatch.opts.body).simulation,true);assert.equal(JSON.parse(dispatch.opts.body).phone,'87788328909');
  assert.ok(tick);
  await tick();
  await tick();
