@@ -153,7 +153,7 @@ async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
 const bomberJobs=new Map();
 const JOB_TTL_MS=60*60*1000;
 function pruneBomberJobs(){const t=Date.now();for(const[id,j]of bomberJobs)if(t-j.startedAt>JOB_TTL_MS)bomberJobs.delete(id);}
-async function runBomberJob(rawPhone,count,channel,simulation){
+async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
  pruneBomberJobs();
  if(!Number.isInteger(count)||count<1||count>100)throw new Error('count must be 1..100');
  const forms=normalizeKzPhone(rawPhone);
@@ -165,6 +165,7 @@ async function runBomberJob(rawPhone,count,channel,simulation){
  else want=new Set(['sms','voice','call']);
  const cfg=await loadBomberConfig();
  cfg.simulation=simulation!==false;
+ if(Array.isArray(liveProxies)&&liveProxies.length)cfg.proxies=liveProxies;
  const id=Math.random().toString(36).slice(2,10);
  const job={id,phone:forms.e164,total:count,sent:0,failed:0,done:false,stopped:false,stopRequested:false,events:[],startedAt:Date.now(),forms,cfg,want,rounds:count};
  bomberJobs.set(id,job);
@@ -207,7 +208,7 @@ async function handleBomberRoute(req,res,pathname){
  if(pathname==='/api/dispatch'&&req.method==='POST'){
   try{
    const b=await body(req);
-   const out=await runBomberJob(String(b.phone||'').trim(),Number(b.count||1),String(b.channel||'both').toLowerCase(),b.simulation!==false);
+   const out=await runBomberJob(String(b.phone||'').trim(),Number(b.count||1),String(b.channel||'both').toLowerCase(),b.simulation!==false,Array.isArray(b.proxies)?b.proxies:null);
    json(res,200,out);
   }catch(e){json(res,400,{error:e.message||'dispatch failed'});}
   return true;
