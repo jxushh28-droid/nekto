@@ -94,7 +94,7 @@ function uaFingerprint(ua){
  if(chrome){
   const v=chrome[1];
   const mobile=/Mobile|Android|iPhone/.test(ua)?'?1':'?0';
-  const platform=/Android/.test(ua)?'"Android"':/iPhone|iPad/.test(ua)?'"iOS"':/Mac OS X/.test(ua)?'"macOS"':'/Linux/.test(ua)?'"Linux"':'"Windows"';
+    const platform=/Android/.test(ua)?'"Android"':/iPhone|iPad/.test(ua)?'"iOS"':/Mac OS X/.test(ua)?'"macOS"':/Linux/.test(ua)?'"Linux"':'"Windows"';
   return{secChUa:'"Chromium";v="'+v+'", "Google Chrome";v="'+v+'", "Not A(Brand";v="99"',mobile,platform};
  }
  const ff=ua.match(/Firefox\/(\d+)/);
