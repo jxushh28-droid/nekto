@@ -4,8 +4,10 @@
   "delay_min_ms": 200,
   "delay_max_ms": 1400,
   "timeout_sec": 10,
-  "simulation_mode": true,
+  "simulation_mode": false,
   "proxies": [],
+  "sms_per_minute": 100,
+  "per_endpoint_cooldown_ms": 5000,
   "endpoints": [
     {
       "name": "myfishing_kz_sms",
