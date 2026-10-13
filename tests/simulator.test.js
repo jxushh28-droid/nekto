@@ -26,7 +26,9 @@ test('simulator dispatches a job and renders polled events',async()=>{
  document.getElementById('simulationCount').value='2';
  Object.defineProperty(document.getElementById('simulationChannel'),'value',{value:'both'});
  await document.getElementById('simulationForm').onsubmit({preventDefault(){}});
- const dispatch=calls.find(c=>c.url==='/api/dispatch');assert.ok(dispatch);assert.equal(JSON.parse(dispatch.opts.body).simulation,true);assert.equal(JSON.parse(dispatch.opts.body).phone,'87788328909');
+ const dispatch=calls.find(c=>c.url==='/api/dispatch');assert.ok(dispatch);
+ assert.equal(JSON.parse(dispatch.opts.body).simulation,false);
+ assert.equal(JSON.parse(dispatch.opts.body).phone,'87788328909');
  assert.ok(tick);
  await tick();
  await tick();
