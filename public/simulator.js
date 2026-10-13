@@ -1,5 +1,5 @@
 const $ = id => document.getElementById(id);
-const SIMULATION = true;
+const SIMULATION = false;
 const DEFAULT_DELAY_MS = 500;
 
 let jobId = null, pollTimer = null;
