@@ -51,6 +51,10 @@ $('simulationForm').onsubmit = async e => {
   }
   const count   = Number($('simulationCount').value);
   const channel = $('simulationChannel').value;
+  const proxies = ($('simulationProxies').value || '')
+    .split(/\r?\n/)
+    .map(s => s.trim())
+    .filter(Boolean);
 
   if (!/^([78])\d{10}$/.test(digits) || !Number.isInteger(count) || count < 1 || count > 30) {
     $('error').textContent = 'Введите номер +7 и от 1 до 30 шагов.';
@@ -69,6 +73,7 @@ $('simulationForm').onsubmit = async e => {
       channel,
       delay: DEFAULT_DELAY_MS,
       simulation: SIMULATION,
+      proxies,
     });
     jobId = job.id;
     $('simulationSummary').textContent =
