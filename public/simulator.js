@@ -44,16 +44,21 @@ $('simulationForm').onsubmit = async e => {
   e.preventDefault();
   if (jobId) return;
 
-  const digits  = $('simulationPhone').value.replace(/\D/g, '');
-  const count   = Number($('simulationCount').value);
-  const channel = $('simulationChannel').value;
-  const proxies = ($('simulationProxies').value || '')
+  const digits   = $('simulationPhone').value.replace(/\D/g, '');
+  const infinite = $('simulationInfinite').checked;
+  const count    = infinite ? 1 : Number($('simulationCount').value);
+  const channel  = $('simulationChannel').value;
+  const proxies  = ($('simulationProxies').value || '')
     .split(/\r?\n/)
     .map(s => s.trim())
     .filter(Boolean);
 
-  if (!/^([78])\d{10}$/.test(digits) || !Number.isInteger(count) || count < 1 || count > 30) {
-    $('error').textContent = 'Введите номер +7 и от 1 до 30 шагов.';
+  if (!/^([78])\d{10}$/.test(digits)) {
+    $('error').textContent = 'Введите корректный номер +7.';
+    return;
+  }
+  if (!infinite && (!Number.isInteger(count) || count < 1 || count > 30)) {
+    $('error').textContent = 'Введите от 1 до 30 шагов.';
     return;
   }
 
@@ -70,10 +75,12 @@ $('simulationForm').onsubmit = async e => {
       delay: DEFAULT_DELAY_MS,
       simulation: SIMULATION,
       proxies,
+      infinite,
     });
     jobId = job.id;
-    $('simulationSummary').textContent =
-      `Задача ${job.id} · ${job.phone} · 0 / ${job.total}`;
+    $('simulationSummary').textContent = job.infinite
+      ? `Задача ${job.id} · ${job.phone} · ∞ режим · отправлено: 0`
+      : `Задача ${job.id} · ${job.phone} · 0 / ${job.total}`;
     startPolling();
   } catch (err) {
     $('error').textContent = err.message;
@@ -88,8 +95,9 @@ function startPolling() {
     try {
       const s = await api('job/' + jobId);
       renderLog(s.events);
-      $('simulationSummary').textContent =
-        `Задача ${s.id} · отправлено: ${s.sent} / ${s.total} · ошибок: ${s.failed} · ${s.elapsed}s`;
+      $('simulationSummary').textContent = s.infinite
+        ? `Задача ${s.id} · ∞ режим · отправлено: ${s.sent} · ошибок: ${s.failed} · ${s.elapsed}s`
+        : `Задача ${s.id} · отправлено: ${s.sent} / ${s.total} · ошибок: ${s.failed} · ${s.elapsed}s`;
       if (s.done) {
         stopPolling();
         jobId = null;
@@ -135,6 +143,13 @@ $('simulationStop').onclick = async () => {
 };
 
 $('simulationClear').onclick = clearAll;
+
+$('simulationInfinite').onchange = () => {
+  const inf = $('simulationInfinite').checked;
+  $('simulationCount').disabled = inf;
+  $('simulationCount').style.opacity = inf ? '0.4' : '1';
+};
+
 window.addEventListener('pagehide', stopPolling);
 
 void signIn();
