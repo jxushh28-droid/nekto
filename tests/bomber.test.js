@@ -111,10 +111,30 @@ test('loadBomberConfig returns normalized endpoints', async () => {
 test('fireEndpoint short-circuits in simulation mode', async () => {
   const forms = normalizeKzPhone('7001234567');
   const ep = { name: 'sim', channel: 'sms', method: 'POST', url: 'https://example.invalid', body: '', headers: {}, contentType: 'application/json', preRequest: null, variants: null };
-  const r = await fireEndpoint(ep, forms, { simulation: true, userAgents: ['x'], timeoutSec: 1 }, null, null);
+  const r = await fireEndpoint(ep, forms, { simulation: true, userAgents: ['x'], acceptLanguages: ['en'], proxies: [], timeoutSec: 1 });
   assert.equal(r.ok, true);
   assert.equal(r.status, 200);
   assert.equal(r.snippet, 'simulated');
+});
+
+test('runBomberJob infinite mode ignores count', async () => {
+  const r = await runBomberJob('7001234567', 0, 'sms', true, null, { infinite: true });
+  assert.equal(r.infinite, true);
+  assert.equal(r.total, null);
+  // let it rip a bit
+  await new Promise(res => setTimeout(res, 800));
+  const j = getJob(r.id);
+  assert.ok(j.sent + j.failed >= 1, 'infinite mode produced events');
+  assert.equal(j.done, false, 'infinite mode does not finish on its own');
+  stopJob(r.id);
+  // give it a moment to drain
+  for (let i = 0; i < 30; i++) {
+    const s = getJob(r.id);
+    if (s.done) break;
+    await new Promise(res => setTimeout(res, 100));
+  }
+  assert.equal(getJob(r.id).done, true, 'infinite mode exits on stop');
+  assert.equal(getJob(r.id).stopped, true);
 });
 
 test('runBomberJob rejects bad count', async () => {
@@ -158,6 +178,14 @@ test('runBomberJob runs in simulation and reports sent count', async () => {
   assert.equal(j.done, true);
   assert.equal(j.sent + j.failed, 3);
   assert.ok(j.sent >= 1);
+});
+
+test('snapshotJob exposes infinite flag', async () => {
+  const r = await runBomberJob('7001234567', 0, 'sms', true, null, { infinite: true });
+  const snap = snapshotJob(getJob(r.id));
+  assert.equal(snap.infinite, true);
+  assert.equal(snap.total, null);
+  stopJob(r.id);
 });
 
 test('snapshotJob supports since cursor', async () => {
